@@ -8,7 +8,9 @@ class Question(Base):
     teacher_id = Column(String, nullable=True)
     question_text = Column(Text, nullable=False)
     answer_text = Column(Text, nullable=False)
-    qtype = Column(String, nullable=False)
-    difficulty = Column(String, nullable=False)
-    metadata_ = Column('metadata', Text, nullable=True)  # Using 'metadata' as the actual column name
+    choices = Column(Text, nullable=True)  # Store as JSON string
+    rationale = Column(Text, nullable=True)  # Explanation for the answer
+    qtype = Column(String, nullable=False)  # 'mcq', 'true_false', 'short_answer'
+    difficulty = Column(String, nullable=False)  # 'easy', 'medium', 'hard'
+    metadata_ = Column('metadata', Text, nullable=True)  # Store additional question data as JSON
     created_at = Column(DateTime(timezone=True), server_default=func.now())

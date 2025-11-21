@@ -12,3 +12,6 @@ wheels/
 uploads
 *.png
 test
+*.db
+migrations
+*.ini

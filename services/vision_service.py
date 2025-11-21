@@ -1,9 +1,13 @@
 # services/vision_service.py
 import os
+import base64
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 from groq import Groq
+
+from services.diagram_utils import contains_diagram, extract_diagram_text
+from typing import Optional
 
 # Load environment variables
 load_dotenv()
@@ -141,3 +145,93 @@ async def describe_image_stub(path: str) -> str:
                 
         except Exception as oe:
             return f"[Error] Failed to process image: {str(oe)}"
+
+
+async def describe_image_groq(image_path: str) -> str:
+    """
+    Enhanced image description that handles both text and diagrams.
+    
+    Args:
+        image_path: Path to the image file
+        
+    Returns:
+        str: Formatted string with extracted text and/or diagram description
+    """
+    if not os.path.exists(image_path):
+        return f"Error: Image file not found at {os.path.abspath(image_path)}"
+    
+    try:
+        from services.ocr_service import extract_text_from_path
+        
+        # Check if image contains diagrams
+        if contains_diagram(image_path):
+            print("Diagram detected in image, using specialized processing...")
+            # Extract and refine text from diagram
+            extracted_text = await extract_diagram_text(image_path)
+            refined_text = await refine_ocr_text(extracted_text)
+            
+            # Get description of the diagram
+            try:
+                diagram_desc = await describe_with_groq(
+                    image_path,
+                    "Describe this diagram in detail, including the type of diagram, "
+                    "key elements, and their relationships. Be factual and objective."
+                )
+            except Exception as e:
+                print(f"Diagram description error: {str(e)}")
+                diagram_desc = "Could not generate description for the diagram."
+            
+            return (
+                "DIAGRAM DETECTED\n"
+                "---------------\n"
+                f"ORIGINAL TEXT:\n{'-'*40}\n{extracted_text}\n\n"
+                f"REFINED TEXT:\n{'-'*40}\n{refined_text}\n\n"
+                f"DIAGRAM DESCRIPTION:\n{'-'*40}\n{diagram_desc}\n"
+                "--------------\n"
+            )
+        else:
+            # Standard text extraction
+            print("Processing as standard text image...")
+            extracted_text = extract_text_from_path(image_path)
+            refined_text = await refine_ocr_text(extracted_text)
+            
+            return (
+                "TEXT EXTRACTION\n"
+                "--------------\n"
+                f"ORIGINAL TEXT:\n{'-'*40}\n{extracted_text}\n\n"
+                
+                f"REFINED TEXT:\n{'-'*40}\n{refined_text}\n\n"
+            )
+            
+    except Exception as e:
+        error_msg = f"[Error] {str(e)}"
+        print(error_msg)
+        raise
+
+async def describe_with_groq(image_path: str, prompt: str) -> str:
+    """Helper function to get description from Groq API."""
+    try:
+        # Read image as base64
+        with open(image_path, "rb") as img_file:
+            img_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+        
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/jpeg;base64,{img_base64}"
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000,
+        )
+        
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Could not generate description: {str(e)}"
