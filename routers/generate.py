@@ -1,73 +1,169 @@
 import os
 import sys
 import json
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from pydantic import BaseModel
-from typing import List
+import asyncio
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 # Add the project root to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from database import get_db
-from services import ocr_service, vision_service, qgen_service
-from models import Question  # Import directly from models
+from services import ocr_service, vision_service, qgen_service, pdf_service
+from models import Question
 import crud
 import schemas
 
 router = APIRouter()
 
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "pdf"}
+
+def get_file_extension(file_path: str) -> str:
+    """Get the file extension in lowercase"""
+    return Path(file_path).suffix.lower().lstrip('.')
+
 class GenerateRequest(BaseModel):
-    file_paths: List[str]
-    qtype: str
-    difficulty: str
-    teacher_id: str = None
-    num_questions: int = 3
+    file_paths: List[str] = Field(..., description="List of file paths to process")
+    qtype: str = Field(..., description="Type of questions to generate (e.g., 'mcq', 'true_false')")
+    difficulty: str = Field(..., description="Difficulty level (e.g., 'easy', 'medium', 'hard')")
+    teacher_id: Optional[str] = Field(None, description="Optional teacher ID")
+    num_questions: int = Field(3, ge=1, le=20, description="Number of questions to generate (1-20)")
+
+async def process_image(file_path: str) -> Dict[str, str]:
+    """Process an image file and return extracted text and description"""
+    try:
+        # Check if the functions are async or not and call them appropriately
+        if hasattr(ocr_service, 'extract_text') and asyncio.iscoroutinefunction(ocr_service.extract_text):
+            text = await ocr_service.extract_text(file_path)
+        elif hasattr(ocr_service, 'extract_text_from_path'):
+            text = await asyncio.to_thread(ocr_service.extract_text_from_path, file_path)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No valid OCR function found"
+            )
+            
+        if hasattr(vision_service, 'describe_image') and asyncio.iscoroutinefunction(vision_service.describe_image):
+            description = await vision_service.describe_image(file_path)
+        elif hasattr(vision_service, 'describe_image_stub'):
+            description = await asyncio.to_thread(vision_service.describe_image_stub, file_path)
+        else:
+            description = ""
+            
+        return {"text": text, "description": description, "type": "image"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing image {file_path}: {str(e)}"
+        )
+
+async def process_pdf(file_path: str) -> Dict[str, str]:
+    """Process a PDF file and return extracted text"""
+    try:
+        # Extract text directly from PDF using a thread pool executor
+        text = await asyncio.to_thread(
+            pdf_service.PDFService.extract_text_from_pdf, 
+            file_path
+        )
+        return {"text": text, "description": "", "type": "pdf"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing PDF {file_path}: {str(e)}"
+        )
+
+@router.post("/from-files")
+async def generate_from_files(
+    req: GenerateRequest, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db)
+):
+    """
+    Generate questions from uploaded files (images or PDFs)
+    """
+    # Validate files exist and have allowed extensions
+    for file_path in req.file_paths:
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File not found: {file_path}"
+            )
+        
+        ext = get_file_extension(file_path)
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File type not allowed: {file_path}. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+
+    # Process files based on their type
+    tasks = []
+    for file_path in req.file_paths:
+        ext = get_file_extension(file_path)
+        if ext == 'pdf':
+            tasks.append(process_pdf(file_path))
+        else:
+            tasks.append(process_image(file_path))
     
-
-@router.post("/from-images")
-async def generate_from_images(req: GenerateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # Validate files exist
-    for p in req.file_paths:
-        if not os.path.exists(p):
-            raise HTTPException(status_code=400, detail=f"File not found: {p}")
-
-    # Process images to extract text and descriptions
-    accumulated_text = []
-    accumulated_desc = []
-    for p in req.file_paths:
-        text = ocr_service.extract_text_from_path(p)
-        desc = await vision_service.describe_image_stub(p)
-        accumulated_text.append(text)
-        accumulated_desc.append(desc)
-
-    full_text = "\n\n".join(accumulated_text)
-    full_desc = "\n\n".join(accumulated_desc)
-
-    # Generate questions
-    qgen_output = qgen_service.generate_questions_from_content(
-        text=full_text,
-        refined_text=full_text,
-        description=full_desc,
-        qtype=req.qtype,
-        difficulty=req.difficulty,
-        num_questions=req.num_questions
+    # Process all files concurrently and gather results
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Process results and ensure we have the actual values, not coroutines
+    processed_results = []
+    for result in results:
+        if isinstance(result, Exception):
+            continue  # Skip failed tasks
+        if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+            result = await result  # Await any coroutines
+        if isinstance(result, dict):
+            processed_results.append(result)
+    
+    # Combine all text and descriptions
+    combined_text = "\n\n".join(
+        str(r.get("text", "")) for r in processed_results
+    )
+    combined_descriptions = "\n\n".join(
+        str(r.get("description", "")) for r in processed_results if r.get("description")
     )
 
+    # Generate questions from combined content
     try:
-        # Parse the questions
-        questions = json.loads(qgen_output)
+        # Run synchronous function in a thread pool
+        questions = await asyncio.to_thread(
+            qgen_service.generate_questions_from_content,
+            text=combined_text,
+            refined_text="",
+            description=combined_descriptions,
+            qtype=req.qtype,
+            difficulty=req.difficulty,
+            num_questions=req.num_questions
+        )
         
-        # If we got an error message, return it
-        if isinstance(questions, list) and len(questions) > 0 and "error" in questions[0]:
-            raise HTTPException(status_code=400, detail=questions[0]["error"])
-            
-        # Save questions to database and prepare response
-        created_questions = []
+        # Parse the JSON string if needed
+        if isinstance(questions, str):
+            try:
+                questions = json.loads(questions)
+            except json.JSONDecodeError:
+                # If parsing fails, try to extract JSON from the string
+                import re
+                json_match = re.search(r'\[\s*\{.*\}\s*\]', questions, re.DOTALL)
+                if json_match:
+                    questions = json.loads(json_match.group(0))
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to parse questions from the model response"
+                    )
+
+        # Save questions to database
+        db_questions = []
         for q in questions:
-            # Create a new question in the database
             db_question = Question(
                 teacher_id=req.teacher_id,
                 question_text=q["question"],
@@ -76,38 +172,39 @@ async def generate_from_images(req: GenerateRequest, background_tasks: Backgroun
                 rationale=q.get("rationale", ""),
                 qtype=req.qtype,
                 difficulty=req.difficulty,
-                metadata_=json.dumps(q)  # Store the full question data
+                metadata_=json.dumps(q)
             )
             db.add(db_question)
-            db.commit()
-            db.refresh(db_question)
-            
-            # Prepare response with all question data
-            response_question = {
-                "id": db_question.id,
-                "question": db_question.question_text,
-                "answer": db_question.answer_text,
-                "qtype": db_question.qtype,
-                "difficulty": db_question.difficulty
-            }
-            
-            # Add choices and rationale if they exist
-            if db_question.choices:
-                response_question["choices"] = json.loads(db_question.choices)
-            if db_question.rationale:
-                response_question["rationale"] = db_question.rationale
-                
-            created_questions.append(response_question)
-            
-        return {"created": created_questions}
+            db_questions.append(db_question)
         
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to parse questions from the model: {str(e)}"
-        )
+        db.commit()
+        
+        # Prepare response
+        response_questions = []
+        for q in db_questions:
+            question_data = {
+                "id": q.id,
+                "question": q.question_text,
+                "answer": q.answer_text,
+                "qtype": q.qtype,
+                "difficulty": q.difficulty
+            }
+            if q.choices:
+                question_data["choices"] = json.loads(q.choices)
+            if q.rationale:
+                question_data["rationale"] = q.rationale
+            response_questions.append(question_data)
+        
+        return {"status": "success", "questions": response_questions}
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        db.rollback()
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating questions: {str(e)}"
         )
+    
+    # JSON decode error handling is now part of the main try-except block
