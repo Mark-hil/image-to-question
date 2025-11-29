@@ -1,2 +1,4 @@
 1. what if it contain the image diagram i want the system to be able to recogized it and describe it.
 2. reduce the letency of the system.
+how will i save the images and also retrive.
+how can i retrive the questions back

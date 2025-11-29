@@ -9,7 +9,7 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from database import engine, Base
-from routers import upload, generate
+from routers import upload, generate, upload_and_generate
 
 # create DB tables (simple approach for prototype)
 Base.metadata.create_all(bind=engine)
@@ -26,6 +26,7 @@ app.add_middleware(
 
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(generate.router, prefix="/generate", tags=["generate"])
+app.include_router(upload_and_generate.router, prefix="/api", tags=["combined"])
 
 @app.get("/")
 async def root():

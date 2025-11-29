@@ -27,7 +27,7 @@ async def test_vision(image_path: str):
 
 if __name__ == "__main__":
     # Specify the path to your image
-    image_path = "uploads/test4.png"
+    image_path = "uploads/testb2.jpeg"
     
     
     # Run the async test
