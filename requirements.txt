@@ -3,7 +3,7 @@ uvicorn[standard]==0.21.1
 python-multipart==0.0.6
 pillow==10.0.0
 pytesseract==0.3.10
-sqlalchemy==1.4.62
+SQLAlchemy==1.4.54
 alembic==1.11.1
 databases==0.5.10
 psycopg2-binary==2.9.7
@@ -11,3 +11,4 @@ python-dotenv==1.0.0
 openai==1.0.0
 aiofiles==23.1.0
 httpx==0.24.1
+
