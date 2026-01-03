@@ -5,7 +5,7 @@ pillow==10.0.0
 pytesseract==0.3.10
 SQLAlchemy==1.4.54
 alembic==1.11.1
-databases==0.5.10
+databases==0.5.5
 psycopg2-binary==2.9.7
 python-dotenv==1.0.0
 openai==1.0.0
