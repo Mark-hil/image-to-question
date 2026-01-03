@@ -7,7 +7,9 @@ class QuestionCreate(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
-    metadata: Optional[str] = None
+    class_for: Optional[str] = None  # e.g., 'Grade 5', 'Class 10'
+    subject: Optional[str] = None    # e.g., 'Math', 'Science', 'History'
+    metadata: Optional[dict] = None
 
 class QuestionOut(BaseModel):
     id: int
@@ -16,7 +18,10 @@ class QuestionOut(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
-    metadata: Optional[str] = None
+    class_for: Optional[str] = None
+    subject: Optional[str] = None
+    metadata: Optional[dict] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Replaces orm_mode in Pydantic v2
+        # orm_mode = True  # Kept for backward compatibility

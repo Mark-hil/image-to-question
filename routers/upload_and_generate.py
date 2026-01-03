@@ -22,6 +22,8 @@ class GenerateRequest(BaseModel):
     difficulty: str
     teacher_id: str
     num_questions: int = 3
+    class_for: Optional[str] = None
+    subject: Optional[str] = None
 
 def validate_file_extension(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -33,6 +35,8 @@ async def upload_and_generate(
     difficulty: str = "medium",
     teacher_id: str = None,
     num_questions: int = 3,
+    class_for: str = None,
+    subject: str = None,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
@@ -124,7 +128,9 @@ async def upload_and_generate(
             description=combined_descriptions,
             qtype=qtype,
             difficulty=difficulty,
-            num_questions=num_questions
+            num_questions=num_questions,
+            class_for=class_for,
+            subject=subject
         )
         
         # Parse the JSON string if needed
@@ -153,6 +159,8 @@ async def upload_and_generate(
                 rationale=q.get("rationale", ""),
                 qtype=qtype,
                 difficulty=difficulty,
+                class_for=class_for,
+                subject=subject,
                 metadata_=json.dumps({"source_files": saved_files})
             )
             db.add(db_question)
@@ -169,7 +177,9 @@ async def upload_and_generate(
                 "choices": json.loads(q.choices) if q.choices else [],
                 "rationale": q.rationale,
                 "type": q.qtype,
-                "difficulty": q.difficulty
+                "difficulty": q.difficulty,
+                "class_for": q.class_for,
+                "subject": q.subject
             }
             for q in db_questions
         ]

@@ -13,10 +13,40 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 MODEL_NAME = "llama-3.1-8b-instant"  # Using Groq's LLaMA 3 70B model
 
 
-def build_prompt(text: str, refined_text: str, description: str, qtype: str, difficulty: str, num_questions: int = 3) -> str:
+def build_prompt(
+    text: str, 
+    refined_text: str, 
+    description: str, 
+    qtype: str, 
+    difficulty: str, 
+    num_questions: int = 3,
+    class_for: str = None,
+    subject: str = None
+) -> str:
     """
     Build a prompt for question generation using Groq.
+    
+    Args:
+        text: The original text content
+        refined_text: The text after OCR processing and refinement
+        description: Description of the image (if any)
+        qtype: Type of questions to generate
+        difficulty: Difficulty level
+        num_questions: Number of questions to generate
+        class_for: The class/grade level the questions are for (e.g., 'Grade 5')
+        subject: The subject of the questions (e.g., 'Math', 'Science')
     """
+    # Add class and subject context to the prompt
+    context_parts = []
+    if class_for:
+        context_parts.append(f"Class/Grade: {class_for}")
+    if subject:
+        context_parts.append(f"Subject: {subject}")
+    
+    context = "\n".join(context_parts)
+    if context:
+        context = f"CONTEXT:\n{context}\n\n"
+
     # Define question type specific instructions
     qtype_instructions = {
         'mcq': """
@@ -106,7 +136,7 @@ EXAMPLE:
         'hard': "Create challenging questions that require analysis, evaluation, or synthesis of information."
     }
 
-    return f"""You are an expert educational content creator. Generate EXACTLY {num_questions} high-quality {qtype} questions at {difficulty} difficulty level.
+    return f"""{context}You are an expert educational content creator. Generate EXACTLY {num_questions} high-quality {qtype} questions at {difficulty} difficulty level for {class_for} in {subject}.
 
 IMPORTANT INSTRUCTIONS - READ CAREFULLY:
 1. CONTEXT TO USE (base your questions on this content):
@@ -144,7 +174,9 @@ def generate_questions_from_content(
     qtype: str = "mcq",
     difficulty: str = "medium",
     num_questions: int = 3,
-    max_retries: int = 2
+    max_retries: int = 2,
+    class_for: str = None,
+    subject: str = None
 ) -> str:
     """
     Generate questions from the given text using Groq's LLaMA model.

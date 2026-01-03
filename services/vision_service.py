@@ -123,7 +123,7 @@ async def describe_image_groq(image_path: str) -> str:
 
 async def describe_image_stub(path: str) -> str:
     """
-    Main function to extract and process text from an image.
+    Async version: Extracts and processes text from an image.
     Returns both original and refined text, with fallback to basic OCR if needed.
     """
     try:
@@ -137,7 +137,10 @@ async def describe_image_stub(path: str) -> str:
         # On failure, try basic OCR without refinement
         try:
             from services.ocr_service import extract_text_from_path
-            extracted_text = extract_text_from_path(path)
+            # Since extract_text_from_path is synchronous, run it in a thread
+            import asyncio
+            loop = asyncio.get_event_loop()
+            extracted_text = await loop.run_in_executor(None, extract_text_from_path, path)
             if not extracted_text:
                 raise ValueError("No text could be extracted")
                 
@@ -145,6 +148,18 @@ async def describe_image_stub(path: str) -> str:
                 
         except Exception as oe:
             return f"[Error] Failed to process image: {str(oe)}"
+
+def describe_image_stub_sync(path: str) -> str:
+    """
+    Synchronous version of describe_image_stub for use in non-async contexts.
+    """
+    import asyncio
+    try:
+        return asyncio.run(describe_image_stub(path))
+    except RuntimeError as e:
+        # Handle case where we're already in an event loop
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(describe_image_stub(path))
 
 
 async def describe_image_groq(image_path: str) -> str:

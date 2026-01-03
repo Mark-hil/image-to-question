@@ -2,3 +2,22 @@
 2. reduce the letency of the system.
 how will i save the images and also retrive.
 how can i retrive the questions back
+
+
+
+
+
+
+
+✅ How to Fix It
+
+You must run your Alembic migration (or re-create the database if you're just testing).
+
+Choose one of the two options:
+
+🅰️ Option A — (Best) Create & Run Migration with Alembic
+1. Generate migration
+alembic revision --autogenerate -m "add class_for and subject fields"
+
+2. Apply migration
+alembic upgrade head
