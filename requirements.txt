@@ -13,4 +13,4 @@ aiofiles==23.1.0
 httpx==0.24.1
 opencv-python
 groq
-
+PyMuPDF
