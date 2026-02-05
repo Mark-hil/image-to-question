@@ -3,11 +3,7 @@
 how will i save the images and also retrive.
 how can i retrive the questions back
 
-
-
-
-
-
+save the image to s3 instaed of local
 
 ✅ How to Fix It
 
