@@ -27,8 +27,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
+from routers import upload, generate, upload_and_generate
 
-@asynclifespan
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events"""
     logger.info("Starting application...")
