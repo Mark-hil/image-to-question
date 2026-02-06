@@ -1,5 +1,7 @@
 import os
 from typing import AsyncGenerator
+from urllib.parse import urlsplit, urlunsplit, parse_qs
+import ssl as _ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
@@ -25,6 +27,23 @@ else:
 
 logger.info(f"Using DATABASE_URL: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL[:30]}...")
 
+# Prepare connect_args and strip unsupported query params (e.g., sslmode) for asyncpg
+connect_args = {}
+parsed = urlsplit(DATABASE_URL)
+qs = parse_qs(parsed.query)
+if qs:
+    # If sslmode is present (common with some cloud providers), asyncpg.connect
+    # doesn't accept `sslmode` as a kwarg. Provide an SSLContext instead and
+    # remove the query parameters from the DSN so they are not forwarded.
+    if 'sslmode' in qs or 'ssl' in qs or 'channel_binding' in qs:
+        ctx = _ssl.create_default_context()
+        # Require certificate verification by default; change if you need different behavior
+        connect_args['ssl'] = ctx
+
+    # Rebuild DATABASE_URL without the query string so asyncpg won't receive unknown kwargs
+    if parsed.query:
+        DATABASE_URL = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', ''))
+
 # Create async engine
 engine = create_async_engine(
     DATABASE_URL,
@@ -33,6 +52,7 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=300,
     poolclass=NullPool if "sqlite" in DATABASE_URL else None,
+    connect_args=connect_args or None,
 )
 
 # Async session factory
