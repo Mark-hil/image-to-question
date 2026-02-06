@@ -1,10 +1,22 @@
 import os
+import logging
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import os
+import sys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -35,6 +47,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    logger.info(f"Request: {request.method} {request.url} - ID: {request_id}")
+    
+    # Log request headers (be careful with sensitive data in production)
+    logger.debug(f"Request headers: {dict(request.headers)}")
+    
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        logger.error(f"Request error: {str(e)}", exc_info=True)
+        raise
+    
+    # Log response status and size
+    response_headers = dict(response.headers)
+    logger.info(
+        f"Response: {request.method} {request.url} - "
+        f"Status: {response.status_code} - "
+        f"Size: {response_headers.get('content-length', '?')} bytes - "
+        f"ID: {request_id}"
+    )
+    return response
+
+# Add startup event to log configuration
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting up application...")
+    logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
+    logger.info(f"Upload directory: {UPLOAD_DIR}")
+    
+    # Test database connection
+    try:
+        async with engine.connect() as conn:
+            await conn.execute("SELECT 1")
+        logger.info("✅ Database connection successful")
+    except Exception as e:
+        logger.error("❌ Database connection failed")
+        logger.error(str(e))
+        raise
+
+# Add shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down application...")
 # Exception handler for file size validation
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
