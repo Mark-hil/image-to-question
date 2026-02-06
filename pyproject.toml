@@ -23,4 +23,6 @@ dependencies = [
     "groq>=1.0.0",
     "pymupdf>=1.26.7",
     "pdf2image>=1.17.0",
+    "databases>=0.5.10",
+    "psycopg2-binary>=2.9.7",
 ]
