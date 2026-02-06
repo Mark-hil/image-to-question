@@ -15,3 +15,4 @@ opencv-python
 groq
 PyMuPDF
 pdf2image
+asyncpg==0.24.0
