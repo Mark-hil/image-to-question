@@ -54,10 +54,12 @@ MAX_PDF_SIZE = 15 * 1024 * 1024  # 15 MB
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, replace with specific origins like ["https://yourfrontend.com"]
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
+    max_age=600,  # Cache preflight response for 10 minutes
 )
 
 # Add request logging middleware
