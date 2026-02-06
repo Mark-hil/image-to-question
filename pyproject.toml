@@ -13,7 +13,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "alembic>=1.11.1",
     "aiosqlite>=0.17.0",
-    "asyncpg>=0.24.0",  # For PostgreSQL
+    "asyncpg>=0.24.0", # For PostgreSQL
     "sqlalchemy-utils>=0.41.0",
     "python-dotenv>=1.0.0",
     "openai>=1.0.0",
@@ -25,5 +25,4 @@ dependencies = [
     "pdf2image>=1.17.0",
     "databases>=0.5.10",
     "psycopg2-binary>=2.9.7",
-    "asyncpg==0.24.0",
 ]
