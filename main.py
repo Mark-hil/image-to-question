@@ -1,12 +1,14 @@
 import os
 import logging
+import sys
+import uuid
+import traceback
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-import os
-import sys
 
 # Configure logging
 logging.basicConfig(
@@ -23,22 +25,32 @@ load_dotenv()
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-from database import engine, Base
-from routers import upload, generate, upload_and_generate
+# Import after environment setup
+from database import engine, Base, init_db
 
-# create DB tables (simple approach for prototype)
-Base.metadata.create_all(bind=engine)
+@asynclifespan
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown events"""
+    logger.info("Starting application...")
+    try:
+        # Initialize database
+        await init_db()
+        logger.info("✅ Database initialized")
+        yield
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize database: {e}")
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        logger.info("Shutting down application...")
+
+app = FastAPI(lifespan=lifespan)
 
 # Maximum file sizes in bytes
 MAX_IMAGE_SIZE = 3 * 1024 * 1024  # 3 MB
 MAX_PDF_SIZE = 15 * 1024 * 1024  # 15 MB
 
-app = FastAPI(
-    title="Question Generation Backend",
-    # Set default request body size limit (slightly larger than our max file size)
-    max_upload_size=MAX_PDF_SIZE + (1 * 1024 * 1024)  # 16 MB to be safe
-)
-
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -93,6 +105,27 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down application...")
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    logger.info(f"Request: {request.method} {request.url} - ID: {request_id}")
+    
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        logger.error(f"Request error: {str(e)}", exc_info=True)
+        raise
+    
+    response_headers = dict(response.headers)
+    logger.info(
+        f"Response: {request.method} {request.url} - "
+        f"Status: {response.status_code} - "
+        f"Size: {response_headers.get('content-length', '?')} bytes - "
+        f"ID: {request_id}"
+    )
+    return response
+
 # Exception handler for file size validation
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -125,6 +158,18 @@ app.include_router(
     tags=["combined"]
 )
 
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        async with engine.connect() as conn:
+            await conn.execute("SELECT 1")
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise
+
 @app.get("/")
 async def root():
-    return {"status": "ok"}
+    return {"status": "ok", "message": "Question Generation API is running"}

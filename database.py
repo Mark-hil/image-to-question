@@ -1,35 +1,67 @@
 import os
-from sqlalchemy import create_engine, event
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 import logging
-import time
 import traceback
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-def log_queries():
-    @event.listens_for(engine, 'before_cursor_execute')
-    def before_cursor_execute(conn, cursor, statement, params, context, executemany):
-        conn.info.setdefault('query_start_time', []).append(time.time())
-        logger.debug(f"Query: {statement}")
-        if params:
-            logger.debug(f"Params: {params}")
-
-    @event.listens_for(engine, 'after_cursor_execute')
-    def after_cursor_execute(conn, cursor, statement, params, context, executemany):
-        total = time.time() - conn.info['query_start_time'].pop(-1)
-        logger.debug(f"Query completed in {total:.3f} seconds")
-
-# Configure logging
-# logging.basicConfig()
-# logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
-
 load_dotenv()
 
 # Get database URL from environment variables
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./sql_app.db")
+
+# For PostgreSQL, use:
+# DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/dbname")
+
+# Create async engine
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=True,
+    future=True,
+    pool_pre_ping=True,
+    pool_recycle=300,  # Recycle connections after 5 minutes
+    pool_size=5,
+    max_overflow=10,
+    poolclass=NullPool if "sqlite" in DATABASE_URL else None
+)
+
+# Create async session factory
+async_session_maker = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+    autocommit=False
+)
+
+Base = declarative_base()
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency for getting async DB session"""
+    async with async_session_maker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Database error: {e}", exc_info=True)
+            raise
+        finally:
+            await session.close()
+
+async def init_db():
+    """Initialize database tables"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+# For backward compatibility with sync code
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     logger.error("DATABASE_URL environment variable not set")
