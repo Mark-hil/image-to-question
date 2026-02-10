@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 COPY pyproject.toml requirements.txt ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -e . --no-deps
+RUN pip install --no-cache-dir -e .
 
 # Copy application code
 COPY . .
@@ -43,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
 # Command to run the application (Render-friendly)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -49,7 +49,6 @@ uploads/
 
 # Test files and debugging
 test/
-tests/
 debug/
 debug*.log
 test
@@ -69,12 +68,12 @@ docs/
 !docker-compose.yaml
 
 # Development files (keep essential, ignore temp)
-main.py
-routers/
-models/
-schemas.py
-crud.py
-database.py
+!main.py
+!routers/
+!models/
+!schemas.py
+!crud.py
+!database.py
 
 # Frequency dictionaries and large data
 frequency_dictionary_*.txt
