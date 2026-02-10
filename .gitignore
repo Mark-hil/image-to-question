@@ -1,17 +1,100 @@
 # Python-generated files
 __pycache__/
-*.py[oc]
+*.py[cod]
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
 # Virtual environments
 .venv
 .env
-uploads
-*.png
-test
+.env.local
+.env.*.local
+
+# Dependencies and caches
+node_modules/
+.npm/
+.yarn/
+.pnpm-cache/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+
+# Logs and databases
+*.log
 *.db
-migrations
-*.ini
+*.sqlite
+*.sqlite3
+
+# Uploads and user content
+uploads/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.doc
+*.docx
+
+# Test files and debugging
+test/
+tests/
+debug/
+debug*.log
+test
+
+# Documentation (keep structure, ignore content)
+docs/
+!README.md
+*.md
+
+# Configuration files (keep structure, ignore content changes)
+!pyproject.toml
+!requirements.txt
+!alembic.ini
+!Dockerfile
+!.dockerignore
+!docker-compose.yml
+!docker-compose.yaml
+
+# Development files (keep essential, ignore temp)
+main.py
+routers/
+models/
+schemas.py
+crud.py
+database.py
+
+# Frequency dictionaries and large data
+frequency_dictionary_*.txt
+*.txt
+
+# Backup and version files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Package management
+uv.lock
+poetry.lock
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Local development
+local_*
+dev_*

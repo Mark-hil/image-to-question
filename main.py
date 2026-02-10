@@ -27,7 +27,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
-from routers import upload, generate, upload_and_generate
+from routers import upload, generate, upload_and_generate, questions
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,16 +51,27 @@ app = FastAPI(lifespan=lifespan)
 MAX_IMAGE_SIZE = 3 * 1024 * 1024  # 3 MB
 MAX_PDF_SIZE = 15 * 1024 * 1024  # 15 MB
 
-# Add CORS middleware
+# Add CORS middleware - must be before other middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with specific origins like ["https://yourfrontend.com"]
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],  # Allow all methods including OPTIONS
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-    max_age=600,  # Cache preflight response for 10 minutes
+    expose_headers=["*"],  # Expose all headers
+    max_age=86400,  # Cache preflight for 24 hours
 )
+
+# Add middleware to handle OPTIONS method for all routes
+@app.middleware("http")
+async def options_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        response = JSONResponse(status_code=200, content={"message": "OK"})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+    return await call_next(request)
 
 # Add request logging middleware
 @app.middleware("http")
@@ -159,6 +170,11 @@ app.include_router(
     upload_and_generate.router, 
     prefix="/api", 
     tags=["combined"]
+)
+app.include_router(
+    questions.router, 
+    prefix="/api", 
+    tags=["questions"]
 )
 
 # Health check endpoint

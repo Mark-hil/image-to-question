@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies only what's needed
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
@@ -19,21 +19,21 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr-spa \
     libtesseract-dev \
     poppler-utils \
-    build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker cache
-COPY pyproject.toml ./
+# Copy only essential files first (leverage Docker cache)
+COPY pyproject.toml requirements.txt ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . --no-deps
 
-# Copy the rest of the application
-COPY . .
+# Copy application code (exclude unnecessary files)
+COPY --chown=app:app . .
 
 # Create uploads directory and set permissions
 RUN mkdir -p $UPLOAD_DIR && \
-    chmod -R 777 $UPLOAD_DIR
+    chmod -R 755 $UPLOAD_DIR
 
 # Expose the port the app runs on
 EXPOSE 8000

@@ -6,17 +6,16 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from sqlalchemy import or_, and_
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-# Add the project root to the Python path
+# Add the project root to Python path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+sys.path.insert(0, project_root)
 
 from database import get_db
-from services import ocr_service, vision_service, qgen_service, pdf_service
+from services import vision_service, qgen_service, pdf_service, ultimate_ocr_service
 from models import Question
 import crud
 import schemas
@@ -30,6 +29,81 @@ def get_file_extension(file_path: str) -> str:
     """Get the file extension in lowercase"""
     return Path(file_path).suffix.lower().lstrip('.')
 
+def allowed_file(filename: str) -> bool:
+    """Check if the file has an allowed extension"""
+    return get_file_extension(filename) in ALLOWED_EXTENSIONS
+
+def is_image(filename: str) -> bool:
+    """Check if the file is an image based on its extension"""
+    return get_file_extension(filename) in {"png", "jpg", "jpeg", "gif"}
+
+def is_pdf(filename: str) -> bool:
+    """Check if the file is a PDF based on its extension"""
+    return get_file_extension(filename) in {"pdf"}
+
+async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_size: int = 3 * 1024 * 1024, max_pdf_size: int = 15 * 1024 * 1024) -> str:
+    """
+    Save an uploaded file and return its path
+    
+    Args:
+        upload_file: The uploaded file
+        upload_dir: Directory to save the file
+        max_image_size: Maximum allowed image size in bytes (default: 3MB)
+        max_pdf_size: Maximum allowed PDF size in bytes (default: 15MB)
+        
+    Returns:
+        str: Path to the saved file
+        
+    Raises:
+        HTTPException: If file type is not allowed or size exceeds limits
+    """
+    if not upload_file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file provided"
+        )
+        
+    if not allowed_file(upload_file.filename):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+        
+    # Read file content to check size
+    content = await upload_file.read()
+    file_size = len(content)
+    
+    # Check file size based on type
+    if is_image(upload_file.filename) and file_size > max_image_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image file is too large. Maximum size is {max_image_size // (1024 * 1024)}MB"
+        )
+    elif is_pdf(upload_file.filename) and file_size > max_pdf_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"PDF file is too large. Maximum size is {max_pdf_size // (1024 * 1024)}MB"
+        )
+        
+    # Reset file pointer after reading
+    await upload_file.seek(0)
+    
+    try:
+        # Create a secure filename
+        filename = Path(upload_file.filename).name
+        file_path = os.path.join(upload_dir, filename)
+        
+        # Save the file using the content we already read
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
+            
+        return file_path
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving file: {str(e)}"
+        )
+
 class GenerateRequest(BaseModel):
     file_paths: List[str] = Field(..., description="List of file paths to process")
     qtype: str = Field(..., description="Type of questions to generate (e.g., 'mcq', 'true_false')")
@@ -42,44 +116,44 @@ class GenerateRequest(BaseModel):
 async def process_image(file_path: str) -> Dict[str, str]:
     """Process an image file and return extracted text and description"""
     try:
-        # Check if the functions are async or not and call them appropriately
-        if hasattr(ocr_service, 'extract_text') and asyncio.iscoroutinefunction(ocr_service.extract_text):
-            text = await ocr_service.extract_text(file_path)
-        elif hasattr(ocr_service, 'extract_text_from_path'):
-            text = await asyncio.to_thread(ocr_service.extract_text_from_path, file_path)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="No valid OCR function found"
-            )
+        # Use ultimate OCR service with severe error correction
+        text = await ultimate_ocr_service.extract_text_from_path(file_path)
         
-        # Get description using the synchronous version of describe_image_stub
-        description = ""
+        # Get additional description if needed
         if hasattr(vision_service, 'describe_image') and asyncio.iscoroutinefunction(vision_service.describe_image):
-            description = await vision_service.describe_image(file_path)
-        elif hasattr(vision_service, 'describe_image_stub_sync'):
-            description = await asyncio.to_thread(vision_service.describe_image_stub_sync, file_path)
-        elif hasattr(vision_service, 'describe_image_stub'):
-            # Fallback to async version if sync version not available
-            description = await vision_service.describe_image_stub(file_path)
-            
-        return {"text": text, "description": description, "type": "image"}
+            description_result = await vision_service.describe_image(file_path)
+            description = description_result.get('description', text.get('description', ''))
+        else:
+            description = text.get('description', '')
+        
+        return {
+            "text": text.get("text", ""),
+            "description": description,
+            "file_path": file_path
+        }
+        
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing image {file_path}: {str(e)}"
-        )
+        logger.error(f"Error processing image {file_path}: {str(e)}")
+        return {
+            "text": "",
+            "description": f"Error processing image: {str(e)}",
+            "file_path": file_path
+        }
 
 async def process_pdf(file_path: str) -> Dict[str, str]:
     """Process a PDF file and return extracted text"""
     try:
-        # Extract text directly from PDF using a thread pool executor
-        text = await asyncio.to_thread(
-            pdf_service.PDFService.extract_text_from_pdf, 
-            file_path
-        )
-        return {"text": text, "description": "", "type": "pdf"}
+        # Use ultimate OCR service with severe error correction
+        text = await ultimate_ocr_service.extract_text_from_path(file_path)
+        
+        return {
+            "text": text.get("text", ""),
+            "description": text.get('description', ''),
+            "file_path": file_path
+        }
+        
     except Exception as e:
+        logger.error(f"Error processing PDF {file_path}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing PDF {file_path}: {str(e)}"

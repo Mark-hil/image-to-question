@@ -17,3 +17,21 @@ alembic revision --autogenerate -m "add class_for and subject fields"
 
 2. Apply migration
 alembic upgrade head
+
+deploy to render 
+
+Key Changes Made:
+Added Timing Metrics:
+Total processing time
+File processing time
+OCR processing time
+Question generation time
+Database operations time
+Start and end timestamps
+Enhanced Logging:
+Added detailed timing logs
+Structured JSON logging for metrics
+Error logging with timestamps
+Improved Error Handling:
+Includes timing metrics in error responses
+Better error messages with context
