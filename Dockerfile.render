@@ -1,4 +1,4 @@
-# Use Python 3.11 slim as the base image
+# Use Python 3.11 slim as base image
 FROM python:3.11-slim
 
 # Set environment variables
@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 COPY pyproject.toml requirements.txt ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -e . --no-deps
+RUN pip install --no-cache-dir -e .
 
 # Copy application code
 COPY . .
