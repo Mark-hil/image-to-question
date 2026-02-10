@@ -18,7 +18,7 @@ alembic revision --autogenerate -m "add class_for and subject fields"
 2. Apply migration
 alembic upgrade head
 
-deploy to render 
+deploy to render with new branch
 
 Key Changes Made:
 Added Timing Metrics:
