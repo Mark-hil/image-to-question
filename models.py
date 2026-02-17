@@ -17,7 +17,7 @@ class Question(Base):
     rationale = Column(Text, nullable=True, comment="Explanation or reasoning for the answer")
     qtype = Column(String(20), nullable=False, index=True, comment="Type of question: 'mcq', 'true_false', 'short_answer'")
     difficulty = Column(String(20), nullable=False, index=True, comment="Difficulty level: 'easy', 'medium', 'hard'")
-    class_for = Column(String(100), nullable=True, index=True, comment="Target class/grade level")
+    class_id = Column(String(100), nullable=True, index=True, comment="Target class/grade level")
     subject = Column(String(100), nullable=True, index=True, comment="Subject area of the question")
     metadata_ = Column('metadata', JSONB, nullable=True, comment="Additional metadata in JSON format")
     created_at = Column(DateTime(timezone=True), 
@@ -51,7 +51,7 @@ class Question(Base):
             'rationale': self.rationale,
             'qtype': self.qtype,
             'difficulty': self.difficulty,
-            'class_for': self.class_for,
+            'class_id': self.class_id,
             'subject': self.subject,
             'metadata': self.metadata_,  # Using the actual column name here
             'created_at': self.created_at.isoformat() if self.created_at else None,

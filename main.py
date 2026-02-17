@@ -3,6 +3,8 @@ import logging
 import sys
 import uuid
 import traceback
+import asyncio
+from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,19 +33,36 @@ from routers import upload, generate, upload_and_generate, questions
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handle application startup and shutdown events"""
+    """Handle application startup and shutdown events with better error handling"""
     logger.info("Starting application...")
     try:
-        # Initialize database
-        await init_db()
-        logger.info("✅ Database initialized")
+        # Initialize database with timeout protection
+        await asyncio.wait_for(init_db(), timeout=60)  # 60 second timeout
+        logger.info("✅ Database initialized successfully")
+        
+        # Log successful startup
+        logger.info("🚀 Application started successfully")
         yield
+        
+    except asyncio.TimeoutError:
+        logger.error("❌ Database initialization timed out after 60 seconds")
+        logger.error("Please check your database connection and try again")
+        # Don't raise - let the app start without database for debugging
+        
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
-        logger.error(traceback.format_exc())
-        raise
+        logger.error(f"Database URL: {os.getenv('DATABASE_URL', 'Not set')[:50]}...")
+        logger.error("Please check your database configuration")
+        # Don't raise - let the app start without database for debugging
+        
     finally:
         logger.info("Shutting down application...")
+        # Clean up database connections
+        try:
+            await engine.dispose()
+            logger.info("✅ Database connections closed")
+        except Exception as e:
+            logger.error(f"Error closing database connections: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -180,14 +199,42 @@ app.include_router(
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint that doesn't fail completely if database is down"""
+    health_status = {"status": "ok", "timestamp": str(datetime.now())}
+    
+    # Check database connection with timeout
     try:
-        async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
-        return {"status": "ok", "database": "connected"}
+        async with asyncio.wait_for(engine.connect(), timeout=5):
+            await asyncio.wait_for(engine.execute("SELECT 1"), timeout=3)
+            health_status["database"] = "connected"
+    except asyncio.TimeoutError:
+        health_status["database"] = "timeout"
+        health_status["status"] = "degraded"
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise
+        health_status["database"] = f"error: {str(e)[:100]}"
+        health_status["status"] = "degraded"
+        logger.warning(f"Health check database issue: {e}")
+    
+    # Check OCR service
+    try:
+        from services.ultimate_ocr_service import UltimateOCRService
+        ocr_service = UltimateOCRService()
+        health_status["ocr"] = "available"
+    except Exception as e:
+        health_status["ocr"] = f"error: {str(e)[:100]}"
+        health_status["status"] = "degraded"
+        logger.warning(f"Health check OCR issue: {e}")
+    
+    # Check question generation service
+    try:
+        from services.qgen_service import generate_questions_from_content
+        health_status["question_generation"] = "available"
+    except Exception as e:
+        health_status["question_generation"] = f"error: {str(e)[:100]}"
+        health_status["status"] = "degraded"
+        logger.warning(f"Health check question generation issue: {e}")
+    
+    return health_status
 
 @app.get("/")
 async def root():

@@ -19,7 +19,7 @@ class QuestionUpdate(BaseModel):
     choices: Optional[List[str]] = None
     rationale: Optional[str] = None
     difficulty: Optional[str] = None
-    class_for: Optional[str] = None
+    class_id: Optional[str] = None
     subject: Optional[str] = None
 
 class QuestionResponse(BaseModel):
@@ -31,7 +31,7 @@ class QuestionResponse(BaseModel):
     rationale: Optional[str]
     qtype: str
     difficulty: str
-    class_for: Optional[str]
+    class_id: Optional[str]
     subject: Optional[str]
     metadata: Optional[Dict[str, Any]]
     created_at: Optional[str]
@@ -80,7 +80,7 @@ async def get_questions_by_teacher(
         teacher_id=teacher_id,
         qtype=None,
         subject=None,
-        class_for=None,
+        class_id=None,
         difficulty=None,
         page=page,
         size=size,
@@ -114,7 +114,7 @@ async def get_questions_by_subject(
         teacher_id=None,
         qtype=None,
         subject=subject,
-        class_for=None,
+        class_id=None,
         difficulty=None,
         page=page,
         size=size,
@@ -122,9 +122,9 @@ async def get_questions_by_subject(
         db=db
     )
 
-@router.get("/questions/by-class/{class_for}", response_model=QuestionListResponse, summary="Get Questions by Class")
+@router.get("/questions/by-class/{class_id}", response_model=QuestionListResponse, summary="Get Questions by Class")
 async def get_questions_by_class(
-    class_for: str,
+    class_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(10, ge=1, le=100, description="Questions per page"),
     db: AsyncSession = Depends(get_db)
@@ -140,7 +140,7 @@ async def get_questions_by_class(
     - `/api/questions/by-class/grade-10`
     
     **Parameters:**
-    - **class_for** (path): Class/grade identifier
+    - **class_id** (path): Class/grade identifier
     - **page**: Pagination page number (default: 1)
     - **size**: Questions per page (default: 10, max: 100)
     """
@@ -148,7 +148,7 @@ async def get_questions_by_class(
         teacher_id=None,
         qtype=None,
         subject=None,
-        class_for=class_for,
+        class_id=class_id,
         difficulty=None,
         page=page,
         size=size,
@@ -182,7 +182,7 @@ async def get_questions_by_difficulty(
         teacher_id=None,
         qtype=None,
         subject=None,
-        class_for=None,
+        class_id=None,
         difficulty=difficulty,
         page=page,
         size=size,
@@ -217,7 +217,7 @@ async def search_questions(
         teacher_id=None,
         qtype=None,
         subject=None,
-        class_for=None,
+        class_id=None,
         difficulty=None,
         page=page,
         size=size,
@@ -230,7 +230,7 @@ async def get_questions(
     teacher_id: Optional[str] = Query(None, description="Filter by teacher ID who created the questions"),
     qtype: Optional[str] = Query(None, description="Filter by question type (mcq, true_false, short_answer)"),
     subject: Optional[str] = Query(None, description="Filter by subject (e.g., english, math, science)"),
-    class_for: Optional[str] = Query(None, description="Filter by class/grade level (e.g., 3, 4, 5)"),
+    class_id: Optional[str] = Query(None, description="Filter by class/grade level (e.g., 3, 4, 5)"),
     difficulty: Optional[str] = Query(None, description="Filter by difficulty level (easy, medium, hard)"),
     page: int = Query(1, ge=1, description="Page number for pagination (starts from 1)"),
     size: int = Query(10, ge=1, le=100, description="Number of questions per page (max 100)"),
@@ -246,16 +246,16 @@ async def get_questions(
     - Get all questions: `/api/questions`
     - Get questions by teacher: `/api/questions?teacher_id=3`
     - Get questions by subject: `/api/questions?subject=english`
-    - Get questions by class: `/api/questions?class_for=3`
+    - Get questions by class: `/api/questions?class_id=3`
     - Get questions by difficulty: `/api/questions?difficulty=easy`
-    - Combine filters: `/api/questions?teacher_id=3&subject=english&class_for=3`
+    - Combine filters: `/api/questions?teacher_id=3&subject=english&class_id=3`
     - Search questions: `/api/questions?search=hands`
     
     **Filter Parameters:**
     - **teacher_id**: Questions created by specific teacher
     - **qtype**: Question type - `mcq`, `true_false`, or `short_answer`
     - **subject**: Subject area - `english`, `math`, `science`, etc.
-    - **class_for**: Target class/grade - `1`, `2`, `3`, `4`, `5`, `6`, etc.
+    - **class_id**: Target class/grade - `1`, `2`, `3`, `4`, `5`, `6`, etc.
     - **difficulty**: Difficulty level - `easy`, `medium`, or `hard`
     - **search**: Text search in question and answer content
     - **page**: Pagination page number (default: 1)
@@ -282,8 +282,8 @@ async def get_questions(
         if subject:
             stmt = stmt.where(Question.subject.ilike(f"%{subject}%"))
         
-        if class_for:
-            stmt = stmt.where(Question.class_for == class_for)
+        if class_id:
+            stmt = stmt.where(Question.class_id == class_id)
         
         if difficulty:
             stmt = stmt.where(Question.difficulty == difficulty)
@@ -350,7 +350,7 @@ async def delete_questions(
     teacher_id: Optional[str] = Query(None, description="Filter by teacher ID"),
     qtype: Optional[str] = Query(None, description="Filter by question type"),
     subject: Optional[str] = Query(None, description="Filter by subject"),
-    class_for: Optional[str] = Query(None, description="Filter by class/grade"),
+    class_id: Optional[str] = Query(None, description="Filter by class/grade"),
     difficulty: Optional[str] = Query(None, description="Filter by difficulty"),
     question_ids: Optional[str] = Query(None, description="Comma-separated question IDs to delete"),
     db: AsyncSession = Depends(get_db)
@@ -389,8 +389,8 @@ async def delete_questions(
             if subject:
                 stmt = stmt.where(Question.subject.ilike(f"%{subject}%"))
             
-            if class_for:
-                stmt = stmt.where(Question.class_for == class_for)
+            if class_id:
+                stmt = stmt.where(Question.class_id == class_id)
             
             if difficulty:
                 stmt = stmt.where(Question.difficulty == difficulty)

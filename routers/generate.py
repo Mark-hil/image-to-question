@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
@@ -21,6 +22,7 @@ import crud
 import schemas
 
 router = APIRouter(prefix="/api", tags=["questions"])
+logger = logging.getLogger(__name__)
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "pdf"}
@@ -110,7 +112,7 @@ class GenerateRequest(BaseModel):
     difficulty: str = Field(..., description="Difficulty level (e.g., 'easy', 'medium', 'hard')")
     teacher_id: Optional[str] = Field(None, description="Optional teacher ID")
     num_questions: int = Field(3, ge=1, le=20, description="Number of questions to generate (1-20)")
-    class_for: Optional[str] = Field(None, description="Class/grade level (e.g., 'Grade 5', 'Class 10')")
+    class_id: Optional[str] = Field(None, description="Class/grade level (e.g., 'Grade 5', 'Class 10')")
     subject: Optional[str] = Field(None, description="Subject of the questions (e.g., 'Math', 'Science')")
 
 async def process_image(file_path: str) -> Dict[str, str]:
@@ -118,6 +120,11 @@ async def process_image(file_path: str) -> Dict[str, str]:
     try:
         # Use ultimate OCR service with severe error correction
         text = await ultimate_ocr_service.extract_text_from_path(file_path)
+        
+        # Check if OCR extraction was successful
+        extracted_text = text.get("text", "").strip()
+        if not extracted_text or extracted_text.startswith("Error:") or "404" in extracted_text or "error" in extracted_text.lower():
+            raise ValueError(f"OCR extraction failed: {extracted_text}")
         
         # Get additional description if needed
         if hasattr(vision_service, 'describe_image') and asyncio.iscoroutinefunction(vision_service.describe_image):
@@ -127,18 +134,17 @@ async def process_image(file_path: str) -> Dict[str, str]:
             description = text.get('description', '')
         
         return {
-            "text": text.get("text", ""),
+            "text": extracted_text,
             "description": description,
             "file_path": file_path
         }
         
     except Exception as e:
         logger.error(f"Error processing image {file_path}: {str(e)}")
-        return {
-            "text": "",
-            "description": f"Error processing image: {str(e)}",
-            "file_path": file_path
-        }
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to process image: {str(e)}"
+        )
 
 async def process_pdf(file_path: str) -> Dict[str, str]:
     """Process a PDF file and return extracted text"""
@@ -146,8 +152,13 @@ async def process_pdf(file_path: str) -> Dict[str, str]:
         # Use ultimate OCR service with severe error correction
         text = await ultimate_ocr_service.extract_text_from_path(file_path)
         
+        # Check if OCR extraction was successful
+        extracted_text = text.get("text", "").strip()
+        if not extracted_text or extracted_text.startswith("Error:") or "404" in extracted_text or "error" in extracted_text.lower():
+            raise ValueError(f"OCR extraction failed: {extracted_text}")
+        
         return {
-            "text": text.get("text", ""),
+            "text": extracted_text,
             "description": text.get('description', ''),
             "file_path": file_path
         }
@@ -155,8 +166,8 @@ async def process_pdf(file_path: str) -> Dict[str, str]:
     except Exception as e:
         logger.error(f"Error processing PDF {file_path}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing PDF {file_path}: {str(e)}"
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to process PDF: {str(e)}"
         )
 
 @router.post("/from-files")
@@ -226,7 +237,7 @@ async def generate_from_files(
             qtype=req.qtype,
             difficulty=req.difficulty,
             num_questions=req.num_questions,
-            class_for=req.class_for,
+            class_id=req.class_id,
             subject=req.subject
         )
         
@@ -241,7 +252,7 @@ async def generate_from_files(
                 rationale=q.get("rationale", ""),
                 qtype=req.qtype,
                 difficulty=req.difficulty,
-                class_for=req.class_for,
+                class_id=req.class_id,
                 subject=req.subject,
                 metadata_=json.dumps(q)
             )
@@ -255,7 +266,7 @@ async def generate_from_files(
                 "answer": db_question.answer_text,
                 "qtype": db_question.qtype,
                 "difficulty": db_question.difficulty,
-                "class_for": db_question.class_for,
+                "class_id": db_question.class_id,
                 "subject": db_question.subject
             }
             if db_question.choices:
@@ -280,7 +291,7 @@ async def generate_from_files(
 
 class QuestionFilter(BaseModel):
     """Filter options for question retrieval"""
-    class_for: Optional[Union[str, List[str]]] = None
+    class_id: Optional[Union[str, List[str]]] = None
     subject: Optional[Union[str, List[str]]] = None
     qtype: Optional[Union[str, List[str]]] = None
     difficulty: Optional[Union[str, List[str]]] = None
@@ -310,7 +321,7 @@ async def get_questions(
     Retrieve questions with advanced filtering, searching, and pagination.
     
     Example queries:
-    - /api/questions/?subject=Math&class_for=Grade%205
+    - /api/questions/?subject=Math&class_id=Grade%205
     - /api/questions/?search=capital%20of%20france
     - /api/questions/?qtype=mcq&difficulty=easy&order_by=created_at&order=desc
     """
@@ -321,11 +332,11 @@ async def get_questions(
         query = db.query(Question)
         
         # Apply filters
-        if filters.class_for:
-            if isinstance(filters.class_for, list):
-                query = query.filter(Question.class_for.in_(filters.class_for))
+        if filters.class_id:
+            if isinstance(filters.class_id, list):
+                query = query.filter(Question.class_id.in_(filters.class_id))
             else:
-                query = query.filter(Question.class_for == filters.class_for)
+                query = query.filter(Question.class_id == filters.class_id)
     
         if filters.subject:
             if isinstance(filters.subject, list):
@@ -403,7 +414,7 @@ async def get_questions(
                 "answer": q.answer_text,
                 "qtype": q.qtype,
                 "difficulty": q.difficulty,
-                "class_for": q.class_for,
+                "class_id": q.class_id,
                 "subject": q.subject,
                 "created_at": q.created_at.isoformat() if q.created_at else None
             }

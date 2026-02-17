@@ -7,6 +7,8 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 import logging
+import asyncio
+from sqlalchemy import text
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -44,15 +46,28 @@ if qs:
     if parsed.query:
         DATABASE_URL = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', ''))
 
-# Create async engine
+# Add timeout configurations to connect_args for asyncpg
+if "postgresql" in DATABASE_URL:
+    connect_args.update({
+        "server_settings": {
+            "application_name": "question_gen_app"
+        },
+        "command_timeout": 30
+    })
+
+# Create async engine with proper configuration
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,
+    echo=False,  # Disable echo in production
     future=True,
     pool_pre_ping=True,
     pool_recycle=300,
     poolclass=NullPool if "sqlite" in DATABASE_URL else None,
     connect_args=connect_args or None,
+    # Pool settings for better connection management
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,  # Timeout for getting connection from pool
 )
 
 # Async session factory
@@ -76,7 +91,42 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 async def init_db() -> None:
-    """Create database tables (runs synchronously in a thread via run_sync)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Create database tables with retry logic and better error handling."""
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempting to initialize database (attempt {attempt + 1}/{max_retries})")
+            
+            # Test connection first
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+                logger.info("Database connection successful")
+                
+            # Create tables
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("✅ Database tables created successfully")
+                return
+                
+        except asyncio.TimeoutError as e:
+            logger.error(f"Database connection timeout (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error("Max retries reached. Database initialization failed.")
+                raise
+                
+        except Exception as e:
+            logger.error(f"Database initialization error (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error("Max retries reached. Database initialization failed.")
+                raise
 

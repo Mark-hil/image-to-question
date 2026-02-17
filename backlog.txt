@@ -19,6 +19,7 @@ alembic revision --autogenerate -m "add class_for and subject fields"
 alembic upgrade head
 
 deploy to render with new branch
+when there is error avoid it from generation fo the questions using the errro messages
 
 Key Changes Made:
 Added Timing Metrics:

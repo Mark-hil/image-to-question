@@ -20,7 +20,7 @@ def build_prompt(
     qtype: str, 
     difficulty: str, 
     num_questions: int = 3,
-    class_for: str = None,
+    class_id: str = None,
     subject: str = None
 ) -> str:
     """
@@ -33,13 +33,13 @@ def build_prompt(
         qtype: Type of questions to generate
         difficulty: Difficulty level
         num_questions: Number of questions to generate
-        class_for: The class/grade level the questions are for (e.g., 'Grade 5')
+        class_id: The class/grade level the questions are for (e.g., 'Grade 5')
         subject: The subject of the questions (e.g., 'Math', 'Science')
     """
     # Add class and subject context to the prompt
     context_parts = []
-    if class_for:
-        context_parts.append(f"Class/Grade: {class_for}")
+    if class_id:
+        context_parts.append(f"Class/Grade: {class_id}")
     if subject:
         context_parts.append(f"Subject: {subject}")
     
@@ -136,7 +136,7 @@ EXAMPLE:
         'hard': "Create challenging questions that require analysis, evaluation, or synthesis of information."
     }
 
-    return f"""{context}You are an expert educational content creator. Generate EXACTLY {num_questions} high-quality {qtype} questions at {difficulty} difficulty level for {class_for} in {subject}.
+    return f"""{context}You are an expert educational content creator. Generate EXACTLY {num_questions} high-quality {qtype} questions at {difficulty} difficulty level for {class_id} in {subject}.
 
 IMPORTANT INSTRUCTIONS - READ CAREFULLY:
 1. CONTEXT TO USE (base your questions on this content):
@@ -175,7 +175,7 @@ def generate_questions_from_content(
     difficulty: str = "medium",
     num_questions: int = 3,
     max_retries: int = 2,
-    class_for: str = None,
+    class_id: str = None,
     subject: str = None
 ) -> str:
     """
@@ -218,7 +218,7 @@ def generate_questions_from_content(
     if not refined_text.strip():
         refined_text = text
         
-    prompt = build_prompt(text, refined_text, description, qtype, difficulty, num_questions)
+    prompt = build_prompt(text, refined_text, description, qtype, difficulty, num_questions, class_id, subject)
     
     for attempt in range(max_retries + 1):
         try:

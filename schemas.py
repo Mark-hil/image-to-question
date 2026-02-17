@@ -7,7 +7,7 @@ class QuestionCreate(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
-    class_for: Optional[str] = None  # e.g., 'Grade 5', 'Class 10'
+    class_id: Optional[str] = None  # e.g., 'Grade 5', 'Class 10'
     subject: Optional[str] = None    # e.g., 'Math', 'Science', 'History'
     metadata: Optional[dict] = None
 
@@ -18,7 +18,7 @@ class QuestionOut(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
-    class_for: Optional[str] = None
+    class_id: Optional[str] = None
     subject: Optional[str] = None
     metadata: Optional[dict] = None
 

@@ -12,6 +12,10 @@ sys.path.append(os.getcwd())
 from models import Base  # Import your Base from models
 from database import DATABASE_URL  # Import your database URL
 
+# Create a synchronous version of DATABASE_URL for migrations
+# Convert asyncpg back to regular postgresql for migrations
+SYNC_DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -47,7 +51,7 @@ def run_migrations_offline() -> None:
 
     """
     # url = config.get_main_option("sqlalchemy.url")
-    url = DATABASE_URL
+    url = SYNC_DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -67,7 +71,7 @@ def run_migrations_online() -> None:
 
     """
     connectable = engine_from_config(
-        {'sqlalchemy.url': DATABASE_URL},
+        {'sqlalchemy.url': SYNC_DATABASE_URL},
         prefix='sqlalchemy.',
         poolclass=pool.NullPool
     )
