@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from utils.exceptions import AppError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, delete, update
 from sqlalchemy.orm import selectinload
@@ -340,9 +341,10 @@ async def get_questions(
         )
         
     except Exception as e:
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving questions: {str(e)}"
+            error_code="DATABASE_ERROR",
+            message=f"Error retrieving questions: {str(e)}"
         )
 
 @router.delete("/questions", response_model=DeleteResponse)
@@ -374,9 +376,10 @@ async def delete_questions(
                 ids = [int(id.strip()) for id in question_ids.split(',')]
                 stmt = stmt.where(Question.id.in_(ids))
             except ValueError:
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid question IDs format. Use comma-separated integers."
+                    error_code="INVALID_IDS_FORMAT",
+                    message="Invalid question IDs format. Use comma-separated integers."
                 )
         else:
             # Apply filters
@@ -418,13 +421,14 @@ async def delete_questions(
             deleted_count=count
         )
         
-    except HTTPException:
+    except (AppError, HTTPException):
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting questions: {str(e)}"
+            error_code="DELETE_ERROR",
+            message=f"Error deleting questions: {str(e)}"
         )
 
 @router.put("/questions/{question_id}", response_model=UpdateResponse)
@@ -445,9 +449,10 @@ async def update_question(
         question = result.scalar_one_or_none()
         
         if not question:
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Question with ID {question_id} not found"
+                error_code="QUESTION_NOT_FOUND",
+                message=f"Question with ID {question_id} not found"
             )
         
         # Update fields if provided
@@ -488,13 +493,14 @@ async def update_question(
             question=QuestionResponse(**question_dict)
         )
         
-    except HTTPException:
+    except (AppError, HTTPException):
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating question: {str(e)}"
+            error_code="UPDATE_ERROR",
+            message=f"Error updating question: {str(e)}"
         )
 
 @router.get("/questions/{question_id}", response_model=QuestionResponse)
@@ -511,9 +517,10 @@ async def get_question(
         question = result.scalar_one_or_none()
         
         if not question:
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Question with ID {question_id} not found"
+                error_code="QUESTION_NOT_FOUND",
+                message=f"Question with ID {question_id} not found"
             )
         
         # Convert to response format
@@ -533,12 +540,13 @@ async def get_question(
         
         return QuestionResponse(**question_dict)
         
-    except HTTPException:
+    except (AppError, HTTPException):
         raise
     except Exception as e:
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving question: {str(e)}"
+            error_code="RETRIEVE_ERROR",
+            message=f"Error retrieving question: {str(e)}"
         )
 
 @router.delete("/questions/{question_id}", response_model=DeleteResponse)
@@ -558,9 +566,10 @@ async def delete_question(
         question = result.scalar_one_or_none()
         
         if not question:
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Question with ID {question_id} not found"
+                error_code="QUESTION_NOT_FOUND",
+                message=f"Question with ID {question_id} not found"
             )
         
         # Delete the question
@@ -573,11 +582,12 @@ async def delete_question(
             deleted_count=1
         )
         
-    except HTTPException:
+    except (AppError, HTTPException):
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting question: {str(e)}"
+            error_code="DELETE_ERROR",
+            message=f"Error deleting question: {str(e)}"
         )

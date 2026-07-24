@@ -8,8 +8,9 @@ from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from sqlalchemy import or_, and_
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status, UploadFile
+from utils.exceptions import AppError
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Add the project root to Python path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,90 +22,10 @@ from models import Question
 import crud
 import schemas
 
-router = APIRouter(prefix="/api", tags=["questions"])
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "pdf"}
-
-def get_file_extension(file_path: str) -> str:
-    """Get the file extension in lowercase"""
-    return Path(file_path).suffix.lower().lstrip('.')
-
-def allowed_file(filename: str) -> bool:
-    """Check if the file has an allowed extension"""
-    return get_file_extension(filename) in ALLOWED_EXTENSIONS
-
-def is_image(filename: str) -> bool:
-    """Check if the file is an image based on its extension"""
-    return get_file_extension(filename) in {"png", "jpg", "jpeg", "gif"}
-
-def is_pdf(filename: str) -> bool:
-    """Check if the file is a PDF based on its extension"""
-    return get_file_extension(filename) in {"pdf"}
-
-async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_size: int = 3 * 1024 * 1024, max_pdf_size: int = 15 * 1024 * 1024) -> str:
-    """
-    Save an uploaded file and return its path
-    
-    Args:
-        upload_file: The uploaded file
-        upload_dir: Directory to save the file
-        max_image_size: Maximum allowed image size in bytes (default: 3MB)
-        max_pdf_size: Maximum allowed PDF size in bytes (default: 15MB)
-        
-    Returns:
-        str: Path to the saved file
-        
-    Raises:
-        HTTPException: If file type is not allowed or size exceeds limits
-    """
-    if not upload_file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No file provided"
-        )
-        
-    if not allowed_file(upload_file.filename):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
-        )
-        
-    # Read file content to check size
-    content = await upload_file.read()
-    file_size = len(content)
-    
-    # Check file size based on type
-    if is_image(upload_file.filename) and file_size > max_image_size:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Image file is too large. Maximum size is {max_image_size // (1024 * 1024)}MB"
-        )
-    elif is_pdf(upload_file.filename) and file_size > max_pdf_size:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"PDF file is too large. Maximum size is {max_pdf_size // (1024 * 1024)}MB"
-        )
-        
-    # Reset file pointer after reading
-    await upload_file.seek(0)
-    
-    try:
-        # Create a secure filename
-        filename = Path(upload_file.filename).name
-        file_path = os.path.join(upload_dir, filename)
-        
-        # Save the file using the content we already read
-        with open(file_path, "wb") as buffer:
-            buffer.write(content)
-            
-        return file_path
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving file: {str(e)}"
-        )
+from utils.file import ALLOWED_EXTENSIONS, get_file_extension
 
 class GenerateRequest(BaseModel):
     file_paths: List[str] = Field(..., description="List of file paths to process")
@@ -141,9 +62,10 @@ async def process_image(file_path: str) -> Dict[str, str]:
         
     except Exception as e:
         logger.error(f"Error processing image {file_path}: {str(e)}")
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to process image: {str(e)}"
+            error_code="IMAGE_PROCESSING_FAILED",
+            message=f"Failed to process image: {str(e)}"
         )
 
 async def process_pdf(file_path: str) -> Dict[str, str]:
@@ -165,16 +87,17 @@ async def process_pdf(file_path: str) -> Dict[str, str]:
         
     except Exception as e:
         logger.error(f"Error processing PDF {file_path}: {str(e)}")
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to process PDF: {str(e)}"
+            error_code="PDF_PROCESSING_FAILED",
+            message=f"Failed to process PDF: {str(e)}"
         )
 
 @router.post("/from-files")
 async def generate_from_files(
     req: GenerateRequest, 
     background_tasks: BackgroundTasks, 
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Generate questions from uploaded files (images or PDFs)
@@ -183,16 +106,18 @@ async def generate_from_files(
         # Validate files exist and have allowed extensions
         for file_path in req.file_paths:
             if not os.path.exists(file_path):
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"File not found: {file_path}"
+                    error_code="FILE_NOT_FOUND",
+                    message=f"File not found: {file_path}"
                 )
             
             ext = get_file_extension(file_path)
             if ext not in ALLOWED_EXTENSIONS:
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"File type not allowed: {ext}"
+                    error_code="INVALID_FILE_TYPE",
+                    message=f"File type not allowed: {ext}"
                 )
         
         # Process each file
@@ -211,11 +136,12 @@ async def generate_from_files(
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 file_path = req.file_paths[i]
-                if isinstance(result, HTTPException):
+                if isinstance(result, AppError) or isinstance(result, HTTPException):
                     raise result
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Error processing file {file_path}: {str(result)}"
+                    error_code="FILE_PROCESSING_ERROR",
+                    message=f"Error processing file {file_path}: {str(result)}"
                 )
         
         # Combine text and descriptions
@@ -223,9 +149,10 @@ async def generate_from_files(
         combined_descriptions = "\n".join([r["description"] for r in results if r.get("description")])
         
         if not combined_text.strip():
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No text could be extracted from the provided files"
+                error_code="NO_TEXT_EXTRACTED",
+                message="No text could be extracted from the provided files"
             )
         
         # Generate questions
@@ -257,8 +184,8 @@ async def generate_from_files(
                 metadata_=json.dumps(q)
             )
             db.add(db_question)
-            db.commit()
-            db.refresh(db_question)
+            await db.commit()
+            await db.refresh(db_question)
             
             question_data = {
                 "id": db_question.id,
@@ -277,193 +204,14 @@ async def generate_from_files(
         
         return {"status": "success", "questions": response_questions}
     
-    except HTTPException:
-        # Re-raise HTTP exceptions
+    except (AppError, HTTPException):
+        # Re-raise exceptions
         raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
+        await db.rollback()
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating questions: {str(e)}"
+            error_code="QUESTION_GENERATION_FAILED",
+            message=f"Error generating questions: {str(e)}"
         )
 
-
-
-class QuestionFilter(BaseModel):
-    """Filter options for question retrieval"""
-    class_id: Optional[Union[str, List[str]]] = None
-    subject: Optional[Union[str, List[str]]] = None
-    qtype: Optional[Union[str, List[str]]] = None
-    difficulty: Optional[Union[str, List[str]]] = None
-    teacher_id: Optional[Union[str, List[str]]] = None
-    search: Optional[str] = None
-    created_after: Optional[datetime] = None
-    created_before: Optional[datetime] = None
-    has_image: Optional[bool] = None
-    has_choices: Optional[bool] = None
-
-
-class QuestionPagination(BaseModel):
-    """Pagination options"""
-    skip: int = 0
-    limit: int = 20
-    order_by: str = "created_at"
-    order: str = "desc"  # 'asc' or 'desc'
-
-
-@router.get("/questions/", response_model=Dict[str, Any])
-async def get_questions(
-    filters: QuestionFilter = Depends(),
-    pagination: QuestionPagination = Depends(),
-    db: Session = Depends(get_db)
-):
-    """
-    Retrieve questions with advanced filtering, searching, and pagination.
-    
-    Example queries:
-    - /api/questions/?subject=Math&class_id=Grade%205
-    - /api/questions/?search=capital%20of%20france
-    - /api/questions/?qtype=mcq&difficulty=easy&order_by=created_at&order=desc
-    """
-    try:
-        from sqlalchemy import desc, asc, func
-        
-        # Start building the query
-        query = db.query(Question)
-        
-        # Apply filters
-        if filters.class_id:
-            if isinstance(filters.class_id, list):
-                query = query.filter(Question.class_id.in_(filters.class_id))
-            else:
-                query = query.filter(Question.class_id == filters.class_id)
-    
-        if filters.subject:
-            if isinstance(filters.subject, list):
-                query = query.filter(Question.subject.in_(filters.subject))
-            else:
-                query = query.filter(Question.subject.ilike(f"%{filters.subject}%"))
-        
-        if filters.qtype:
-            if isinstance(filters.qtype, list):
-                query = query.filter(Question.qtype.in_(filters.qtype))
-            else:
-                query = query.filter(Question.qtype == filters.qtype)
-        
-        if filters.difficulty:
-            if isinstance(filters.difficulty, list):
-                query = query.filter(Question.difficulty.in_(filters.difficulty))
-            else:
-                query = query.filter(Question.difficulty == filters.difficulty)
-        
-        if filters.teacher_id:
-            if isinstance(filters.teacher_id, list):
-                query = query.filter(Question.teacher_id.in_(filters.teacher_id))
-            else:
-                query = query.filter(Question.teacher_id == filters.teacher_id)
-        
-        # Text search across question and answer
-        if filters.search:
-            search = f"%{filters.search}%"
-            query = query.filter(
-                or_(
-                    Question.question_text.ilike(search),
-                    Question.answer_text.ilike(search),
-                    Question.rationale.ilike(search)
-                )
-            )
-        
-        # Date range filters
-        if filters.created_after:
-            query = query.filter(Question.created_at >= filters.created_after)
-        if filters.created_before:
-            query = query.filter(Question.created_at <= filters.created_before)
-        
-        # Special filters
-        if filters.has_image is not None:
-            if filters.has_image:
-                query = query.filter(Question.metadata_.contains('"source_files":'))
-            else:
-                query = query.filter(~Question.metadata_.contains('"source_files":'))
-        
-        if filters.has_choices is not None:
-            if filters.has_choices:
-                query = query.filter(Question.choices != None)  # noqa: E711
-            else:
-                query = query.filter(Question.choices == None)  # noqa: E711
-        
-        # Get total count before pagination
-        total = query.count()
-        
-        # Apply ordering
-        order_column = getattr(Question, pagination.order_by, Question.created_at)
-        if pagination.order.lower() == 'desc':
-            query = query.order_by(desc(order_column))
-        else:
-            query = query.order_by(asc(order_column))
-        
-        # Apply pagination
-        questions = query.offset(pagination.skip).limit(pagination.limit).all()
-        
-        # Prepare response
-        response_questions = []
-        for q in questions:
-            question_data = {
-                "id": q.id,
-                "question": q.question_text,
-                "answer": q.answer_text,
-                "qtype": q.qtype,
-                "difficulty": q.difficulty,
-                "class_id": q.class_id,
-                "subject": q.subject,
-                "created_at": q.created_at.isoformat() if q.created_at else None
-            }
-            
-            # Add choices if they exist
-            if q.choices:
-                try:
-                    question_data["choices"] = json.loads(q.choices)
-                except json.JSONDecodeError:
-                    question_data["choices"] = []
-            
-            # Add rationale if it exists
-            if q.rationale:
-                question_data["rationale"] = q.rationale
-            
-            # Add metadata if it exists
-            if q.metadata_:
-                try:
-                    question_data["metadata"] = json.loads(q.metadata_)
-                except json.JSONDecodeError:
-                    question_data["metadata"] = {}
-            
-            response_questions.append(question_data)
-        
-        return {
-            "status": "success",
-            "data": response_questions,
-            "pagination": {
-                "total": total,
-                "returned": len(response_questions),
-                "offset": pagination.skip,
-                "limit": pagination.limit,
-                "has_more": (pagination.skip + len(response_questions)) < total
-            }
-        }
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating questions: {str(e)}"
-        )
-    
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving questions: {str(e)}"
-        )

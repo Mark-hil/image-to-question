@@ -5,10 +5,11 @@ import time
 import logging
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends, BackgroundTasks, Query
+from utils.exceptions import AppError
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 from pydantic import BaseModel
 import traceback
@@ -16,7 +17,8 @@ import traceback
 from database import get_db
 from models import Question
 from services.qgen_service import generate_questions_from_content
-from .generate import ALLOWED_EXTENSIONS, save_upload_file, process_image, process_pdf, get_file_extension
+from .generate import process_image, process_pdf
+from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -112,7 +114,7 @@ async def upload_and_generate(
     class_id: str = None,
     subject: str = None,
     background_tasks: BackgroundTasks = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload files and generate questions in one step with detailed timing metrics.
@@ -140,9 +142,10 @@ async def upload_and_generate(
                 request_data=request_data,
                 error=error_msg
             )
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
+                error_code="NO_FILES_PROVIDED",
+                message=error_msg
             )
         metrics.end_stage("validation")
         
@@ -169,9 +172,10 @@ async def upload_and_generate(
                     request_data=request_data,
                     error=error_msg
                 )
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=error_msg
+                    error_code="INVALID_FILE_TYPE",
+                    message=error_msg
                 )
             
             try:
@@ -223,9 +227,10 @@ async def upload_and_generate(
                     request_data=request_data,
                     error=error_msg
                 )
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=error_msg
+                    error_code="OCR_PROCESSING_FAILED",
+                    message=error_msg
                 )
         
         metrics.end_stage("ocr_processing")
@@ -269,9 +274,10 @@ async def upload_and_generate(
                 request_data=request_data,
                 error=error_msg
             )
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=error_msg
+                error_code="OCR_PROCESSING_FAILED",
+                message=error_msg
             )
         
         # If no valid results, stop processing
@@ -284,9 +290,10 @@ async def upload_and_generate(
                 request_data=request_data,
                 error=error_msg
             )
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=error_msg
+                error_code="NO_TEXT_EXTRACTED",
+                message=error_msg
             )
         
         # Generate questions for each image individually
@@ -379,9 +386,10 @@ async def upload_and_generate(
                             request_data=request_data,
                             error=error_msg
                         )
-                        raise HTTPException(
+                        raise AppError(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=error_msg
+                            error_code="QUESTION_PARSING_FAILED",
+                            message=error_msg
                         )
             
             metrics.end_stage("question_generation")
@@ -417,7 +425,7 @@ async def upload_and_generate(
                     db.add(db_question)
                     db_questions.append(db_question)
                 
-                db.commit()
+                await db.commit()
                 
                 # Prepare response data with image organization
                 response_data = []
@@ -461,7 +469,7 @@ async def upload_and_generate(
                 }
                 
             except Exception as e:
-                db.rollback()
+                await db.rollback()
                 error_msg = f"Database error: {str(e)}"
                 log_processing_metrics(
                     stage="database_operations",
@@ -470,9 +478,10 @@ async def upload_and_generate(
                     request_data=request_data,
                     error=error_msg
                 )
-                raise HTTPException(
+                raise AppError(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=error_msg
+                    error_code="DATABASE_ERROR",
+                    message=error_msg
                 )
                 
         except Exception as e:
@@ -484,12 +493,13 @@ async def upload_and_generate(
                 request_data=request_data,
                 error=error_msg
             )
-            raise HTTPException(
+            raise AppError(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_msg
+                error_code="QUESTION_GENERATION_FAILED",
+                message=error_msg
             )
             
-    except HTTPException:
+    except (AppError, HTTPException):
         # Re-raise HTTP exceptions as they are
         raise
         
@@ -503,9 +513,10 @@ async def upload_and_generate(
             error=error_msg,
             traceback=traceback.format_exc()
         )
-        raise HTTPException(
+        raise AppError(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_msg
+            error_code="UNEXPECTED_ERROR",
+            message=error_msg
         )
         
     finally:

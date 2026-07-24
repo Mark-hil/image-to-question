@@ -3,18 +3,15 @@ import os
 import base64
 from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
+from config import settings
 from groq import Groq
 
 from services.diagram_utils import contains_diagram, extract_diagram_text
 from typing import Optional
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MODEL_NAME = "llama-3.1-8b-instant"  # Using a supported Groq model
+GROQ_API_KEY = settings.GROQ_API_KEY
+MODEL_NAME = "qwen/qwen3.6-27b"  # Using a supported Groq model
 
 # Validate API key
 if not GROQ_API_KEY:

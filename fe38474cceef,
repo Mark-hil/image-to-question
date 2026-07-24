@@ -1,0 +1,43 @@
+~/.local/bin/uv venv && source .venv/bin/activate && ~/.local/bin/uv pip install -r requirements.txt
+source .venv/bin/activate && uvicorn main:app --reload
+
+
+1. 🚀 Performance: Fix Sync Database Calls in Async Routes
+In your routers/generate.py, I noticed synchronous database operations (like db.commit() and db.add()) being called directly inside async def route handlers.
+
+The Problem: Using synchronous SQLAlchemy calls inside a FastAPI async def function blocks the entire async event loop. This means while the DB is saving, the server cannot accept any other requests.
+The Fix: Switch to AsyncSession from sqlalchemy.ext.asyncio across the board (using await db.commit()), or run synchronous DB operations inside a thread pool (await asyncio.to_thread(sync_db_function)). Note: Your questions.py is correctly using AsyncSession!
+2. 🏗️ Architecture: Adopt a Task Queue (Celery / Redis)
+Currently, endpoints like /api/generate/upload-and-generate perform heavy operations (running OCR, awaiting large AI model responses) while the user waits for the HTTP request to finish.
+
+The Problem: If the OCR or AI generation takes longer than the browser's timeout limit (usually 30-60 seconds), the connection will drop, and the user will get an error, even if the backend succeeds.
+The Fix: Introduce a task queue like Celery (with Redis). The endpoint should immediately return a task_id (e.g., {"status": "processing", "task_id": "123"}). The frontend can then poll a /api/tasks/123 endpoint to check if the questions are ready.
+3. ⚙️ Configuration Management: Use Pydantic Settings
+Right now, environment variables are loaded using os.getenv() scattered across files (main.py, upload.py, etc.).
+
+The Fix: Use pydantic-settings. Create a config.py file that defines a Settings class. This provides auto-validation on startup (the app will crash immediately if a required API key is missing) and gives you clean, typed configurations (e.g., settings.UPLOAD_DIR).
+4. 🔒 Security: Lock Down CORS and File Uploads
+CORS: In main.py, allow_origins=["*"] is currently set. Before production, this should be driven by an environment variable (e.g., CORS_ORIGINS="https://yourfrontend.com") to prevent unauthorized cross-origin requests.
+File Upload Security: Checking the file extension (e.g., .pdf) is a good start, but malicious files can spoof extensions. You could improve security by verifying the actual MIME type/magic numbers of the uploaded files using a library like python-magic.
+5. 📁 Project Structure: Move Models and CRUD into Modules
+Currently, models.py, schemas.py, and crud.py are sitting in the root directory.
+
+The Fix: As the application grows, standard FastAPI practice is to move these into dedicated folders. For example:
+text
+app/
+├── models/        # database models
+├── schemas/       # pydantic models
+├── crud/          # database operations
+├── routers/       # api endpoints
+├── services/      # business logic (OCR, GenAI)
+└── utils/         # helpers
+6. 🧹 Standardize Error Handling
+Instead of throwing generic HTTPExceptions with varying string messages, you could create a centralized custom error handler in main.py. This ensures your frontend always receives a predictable error structure, such as:
+
+json
+{
+  "error_code": "FILE_TOO_LARGE",
+  "message": "The uploaded file exceeds the 3MB limit.",
+  "details": null
+}
+Would you like to dive deeper into any of these areas? We could start by fixing the synchronous database calls in generate.py or setting up a robust config.py using Pydantic!

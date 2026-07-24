@@ -7,7 +7,7 @@ import os
 import re
 from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
-from dotenv import load_dotenv
+from config import settings
 from typing import List, Tuple, Optional, Dict, Any, Union
 import json
 import sys
@@ -26,8 +26,7 @@ from services.vision_service import describe_image_stub
 # =====================================================
 #  LOAD TESSERACT
 # =====================================================
-load_dotenv()
-TESS_CMD = os.getenv("TESSERACT_CMD")
+TESS_CMD = settings.TESSERACT_CMD
 if TESS_CMD:
     pytesseract.pytesseract.tesseract_cmd = TESS_CMD
 

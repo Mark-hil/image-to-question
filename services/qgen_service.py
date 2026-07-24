@@ -1,13 +1,10 @@
 import os
-from dotenv import load_dotenv
+from config import settings
 from groq import Groq
 import json
 
-# Load environment variables
-load_dotenv()
-
 # Initialize Groq client
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+groq_client = Groq(api_key=settings.GROQ_API_KEY)
 
 # Model configuration
 MODEL_NAME = "llama-3.1-8b-instant"  # Using Groq's LLaMA 3 70B model
@@ -211,7 +208,7 @@ def generate_questions_from_content(
     if not text.strip() and not refined_text.strip():
         return json.dumps([{"error": "No text content provided"}])
     
-    if not os.getenv("GROQ_API_KEY"):
+    if not settings.GROQ_API_KEY:
         return json.dumps([{"error": "GROQ_API_KEY not found in environment variables"}])
     
     # If no refined text is provided, use the original text

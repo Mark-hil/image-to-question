@@ -6,11 +6,13 @@ import traceback
 import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from config import settings
+from utils.exceptions import AppError
 
 # Configure logging
 logging.basicConfig(
@@ -22,9 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+UPLOAD_DIR = settings.UPLOAD_DIR
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
@@ -35,34 +36,35 @@ from routers import upload, generate, upload_and_generate, questions
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events with better error handling"""
     logger.info("Starting application...")
+    # logger.info(f"Environment: {settings.ENVIRONMENT}")
+    logger.info(f"Upload directory: {UPLOAD_DIR}")
     try:
         # Initialize database with timeout protection
         await asyncio.wait_for(init_db(), timeout=60)  # 60 second timeout
-        logger.info("✅ Database initialized successfully")
-        
-        # Log successful startup
-        logger.info("🚀 Application started successfully")
-        yield
+        logger.info("Database initialized successfully")
         
     except asyncio.TimeoutError:
-        logger.error("❌ Database initialization timed out after 60 seconds")
+        logger.error("Database initialization timed out after 60 seconds")
         logger.error("Please check your database connection and try again")
         # Don't raise - let the app start without database for debugging
         
     except Exception as e:
-        logger.error(f"❌ Failed to initialize database: {e}")
-        logger.error(f"Database URL: {os.getenv('DATABASE_URL', 'Not set')[:50]}...")
+        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Database URL: {settings.DATABASE_URL[:50]}...")
         logger.error("Please check your database configuration")
         # Don't raise - let the app start without database for debugging
         
-    finally:
-        logger.info("Shutting down application...")
-        # Clean up database connections
-        try:
-            await engine.dispose()
-            logger.info("✅ Database connections closed")
-        except Exception as e:
-            logger.error(f"Error closing database connections: {e}")
+    logger.info("Application startup complete.")
+    
+    yield
+    
+    logger.info("Shutting down application...")
+    # Clean up database connections
+    try:
+        await engine.dispose()
+        logger.info("✅ Database connections closed")
+    except Exception as e:
+        logger.error(f"Error closing database connections: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -117,83 +119,80 @@ async def log_requests(request: Request, call_next):
     )
     return response
 
-# Add startup event to log configuration
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting up application...")
-    logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    logger.info(f"Upload directory: {UPLOAD_DIR}")
-    
-    # Test database connection
-    try:
-        async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
-        logger.info("✅ Database connection successful")
-    except Exception as e:
-        logger.error("❌ Database connection failed")
-        logger.error(str(e))
-        raise
 
-# Add shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down application...")
-# Add request logging middleware
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    request_id = str(uuid.uuid4())
-    logger.info(f"Request: {request.method} {request.url} - ID: {request_id}")
-    
-    try:
-        response = await call_next(request)
-    except Exception as e:
-        logger.error(f"Request error: {str(e)}", exc_info=True)
-        raise
-    
-    response_headers = dict(response.headers)
-    logger.info(
-        f"Response: {request.method} {request.url} - "
-        f"Status: {response.status_code} - "
-        f"Size: {response_headers.get('content-length', '?')} bytes - "
-        f"ID: {request_id}"
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details
+        }
     )
-    return response
 
-# Exception handler for file size validation
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    error_code = "API_ERROR"
+    if exc.status_code == 404:
+        error_code = "NOT_FOUND"
+    elif exc.status_code == 401:
+        error_code = "UNAUTHORIZED"
+    elif exc.status_code == 403:
+        error_code = "FORBIDDEN"
+        
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": error_code,
+            "message": str(exc.detail),
+            "details": None
+        }
+    )
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    # Check if the error is related to file size
     for error in exc.errors():
         if error["type"] == "request_too_large":
             return JSONResponse(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                content={"detail": "File is too large. Images must be ≤3 MB and PDFs must be ≤15 MB."}
+                content={
+                    "error_code": "FILE_TOO_LARGE",
+                    "message": "File is too large. Images must be ≤3 MB and PDFs must be ≤15 MB.",
+                    "details": None
+                }
             )
+            
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors()},
+        content={
+            "error_code": "VALIDATION_ERROR",
+            "message": "Invalid request parameters",
+            "details": exc.errors()
+        }
     )
 
-# Include routers with file size limits
+# Include routers with standardized prefixes
 app.include_router(
     upload.router, 
-    prefix="/upload", 
-    tags=["upload"]
+    prefix="/api/upload", 
+    tags=["Upload"]
 )
 app.include_router(
     generate.router, 
-    prefix="/generate", 
-    tags=["generate"]
+    prefix="/api/generate", 
+    tags=["Generate"]
 )
 app.include_router(
     upload_and_generate.router, 
-    prefix="/api", 
-    tags=["combined"]
+    prefix="/api/generate", 
+    tags=["Generate"]
 )
 app.include_router(
     questions.router, 
     prefix="/api", 
-    tags=["questions"]
+    tags=["Questions"]
 )
 
 # Health check endpoint
@@ -204,8 +203,9 @@ async def health_check():
     
     # Check database connection with timeout
     try:
-        async with asyncio.wait_for(engine.connect(), timeout=5):
-            await asyncio.wait_for(engine.execute("SELECT 1"), timeout=3)
+        from sqlalchemy import text
+        async with asyncio.wait_for(engine.connect(), timeout=5) as conn:
+            await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3)
             health_status["database"] = "connected"
     except asyncio.TimeoutError:
         health_status["database"] = "timeout"

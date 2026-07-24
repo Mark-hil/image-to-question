@@ -5,16 +5,16 @@ import ssl as _ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
-from dotenv import load_dotenv
+from config import settings
 import logging
 import asyncio
 from sqlalchemy import text
 
-load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 # Read DB URL from environment (default to sqlite async for local dev)
-_raw_db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./sql_app.db")
+_raw_db_url = settings.DATABASE_URL
 
 # If a plain `postgresql://` URL is provided, SQLAlchemy's async extension
 # requires the URL to specify an async driver such as `asyncpg`:
