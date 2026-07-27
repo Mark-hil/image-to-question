@@ -4,7 +4,7 @@ import json
 import time
 import logging
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query
 from utils.exceptions import AppError
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional, Tuple
@@ -107,18 +107,27 @@ def validate_file_extension(filename: str) -> bool:
 @router.post("/upload-and-generate")
 async def upload_and_generate(
     files: List[UploadFile] = File(...),
-    qtype: str = "mcq",
-    difficulty: str = "medium",
-    teacher_id: str = None,
-    num_questions: int = 3,
-    class_id: str = None,
-    subject: str = None,
+    qtype: Optional[str] = Form(None),
+    qtype_query: Optional[str] = Query(None, alias="qtype"),
+    difficulty: Optional[str] = Form(None),
+    difficulty_query: Optional[str] = Query(None, alias="difficulty"),
+    teacher_id: Optional[str] = Form(None),
+    num_questions: Optional[int] = Form(None),
+    num_questions_query: Optional[int] = Query(None, alias="num_questions"),
+    class_id: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    subject_query: Optional[str] = Query(None, alias="subject"),
     background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Upload files and generate questions in one step with detailed timing metrics.
     """
+    qtype = qtype or qtype_query or "mcq"
+    difficulty = difficulty or difficulty_query or "medium"
+    num_questions = num_questions or num_questions_query or 3
+    subject = subject or subject_query or "General"
+
     metrics = ProcessingMetrics()
     request_data = {
         "qtype": qtype,
@@ -436,16 +445,18 @@ async def upload_and_generate(
                     question_data = {
                         "id": q.id,
                         "question": q.question_text,
+                        "question_text": q.question_text,
                         "answer": q.answer_text,
+                        "answer_text": q.answer_text,
                         "choices": json.loads(q.choices) if q.choices else [],
                         "rationale": q.rationale,
                         "type": q.qtype,
+                        "qtype": q.qtype,
                         "difficulty": q.difficulty,
                         "class_id": q.class_id,
                         "subject": q.subject,
                         "source_image": metadata.get("source_image", 0),
                         "source_file": metadata.get("source_file", ""),
-                        # "image_description": metadata.get("image_description", "")
                     }
                     response_data.append(question_data)
                 

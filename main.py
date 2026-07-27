@@ -30,7 +30,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
-from routers import upload, generate, upload_and_generate, questions, tenant, billing
+from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -233,6 +233,16 @@ app.include_router(
     prefix="/api/billing",
     tags=["Billing & Payments (Paystack)"]
 )
+app.include_router(
+    auth.router,
+    prefix="/api/auth",
+    tags=["User Auth (JWT)"]
+)
+app.include_router(
+    quizzes.router,
+    prefix="/api/quizzes",
+    tags=["Quiz Banks & Export"]
+)
 
 # Health check endpoint
 @app.get("/health")
@@ -275,6 +285,19 @@ async def health_check():
     
     return health_status
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Question Generation API is running"}
+# Serve React Web UI Dashboard
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+if os.path.exists(frontend_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        if full_path.startswith("api/") or full_path in ["health", "docs", "openapi.json", "redoc"]:
+            raise HTTPException(status_code=404, detail="Endpoint not found")
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
