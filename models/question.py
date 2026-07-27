@@ -5,6 +5,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func, text
 from database import Base
 
+JSON_TYPE = JSON().with_variant(JSONB, 'postgresql')
+
 class Question(Base):
     """Database model for storing questions."""
     __tablename__ = "questions"
@@ -13,13 +15,13 @@ class Question(Base):
     teacher_id = Column(String(100), nullable=True, index=True, comment="ID of the teacher who created the question")
     question_text = Column(Text, nullable=False, comment="The actual question text")
     answer_text = Column(Text, nullable=False, comment="The correct answer to the question")
-    choices = Column(JSONB, nullable=True, comment="Multiple choice options (for MCQ type questions)")
+    choices = Column(JSON_TYPE, nullable=True, comment="Multiple choice options (for MCQ type questions)")
     rationale = Column(Text, nullable=True, comment="Explanation or reasoning for the answer")
     qtype = Column(String(20), nullable=False, index=True, comment="Type of question: 'mcq', 'true_false', 'short_answer'")
     difficulty = Column(String(20), nullable=False, index=True, comment="Difficulty level: 'easy', 'medium', 'hard'")
     class_id = Column(String(100), nullable=True, index=True, comment="Target class/grade level")
     subject = Column(String(100), nullable=True, index=True, comment="Subject area of the question")
-    metadata_ = Column('metadata', JSONB, nullable=True, comment="Additional metadata in JSON format")
+    metadata_ = Column('metadata', JSON_TYPE, nullable=True, comment="Additional metadata in JSON format")
     created_at = Column(DateTime(timezone=True), 
                        server_default=func.now(),
                        nullable=False,

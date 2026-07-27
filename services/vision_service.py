@@ -1,17 +1,23 @@
 # services/vision_service.py
 import os
+import re
 import base64
+import json
+import asyncio
+import logging
+import mimetypes
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from config import settings
 from groq import Groq
 
 from services.diagram_utils import contains_diagram, extract_diagram_text
-from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 GROQ_API_KEY = settings.GROQ_API_KEY
-MODEL_NAME = "qwen/qwen3.6-27b"  # Using a supported Groq model
+MODEL_NAME = "qwen/qwen3.6-27b"  # Using supported Groq vision model
 
 # Validate API key
 if not GROQ_API_KEY:
@@ -20,230 +26,181 @@ if not GROQ_API_KEY:
 # Initialize Groq client
 client = Groq(api_key=GROQ_API_KEY)
 
+async def extract_text_and_description_with_vision(image_path: str) -> Dict[str, str]:
+    """
+    Extracts text and visual descriptions directly from an image using
+    Groq Multimodal Vision Model (qwen/qwen3.6-27b).
+    Falls back to UltimateOCRService (PyTesseract OCR) if API fails.
+    """
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Image file not found at {os.path.abspath(image_path)}")
+
+    try:
+        logger.info(f"Extracting content with Groq Vision LLM for: {image_path}")
+        
+        # Determine MIME type
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if not mime_type:
+            mime_type = "image/jpeg"
+
+        # Base64 encode image
+        with open(image_path, "rb") as img_file:
+            b64_img = base64.b64encode(img_file.read()).decode("utf-8")
+
+        prompt = (
+            "Analyze this image thoroughly for educational quiz and test generation.\n"
+            "Return ONLY valid JSON (no code blocks or markdown wrappers) with exactly two keys:\n"
+            "{\n"
+            '  "text": "Complete, accurate text transcription preserving headings, tables, and sentence structure.",\n'
+            '  "description": "Detailed description of any visual figures, charts, diagrams, or math formulas."\n'
+            "}"
+        )
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}
+                            }
+                        ]
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=2048,
+            )
+        )
+
+        raw = response.choices[0].message.content
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        cleaned = re.sub(r"^```json\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^```\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+
+        try:
+            data = json.loads(cleaned)
+            extracted_text = data.get("text", "").strip()
+            description = data.get("description", "").strip()
+        except Exception:
+            extracted_text = cleaned
+            description = f"Extracted via Groq Vision from {os.path.basename(image_path)}"
+
+        if extracted_text and not extracted_text.startswith("Error"):
+            logger.info(f"Successfully extracted {len(extracted_text)} chars with Groq Vision")
+            return {
+                "text": extracted_text,
+                "description": description,
+                "file_path": image_path
+            }
+        else:
+            raise ValueError(f"Vision model returned empty text: {cleaned}")
+
+    except Exception as e:
+        logger.warning(f"Vision model extraction failed for {image_path}: {e}. Falling back to OCR...")
+        from services.ultimate_ocr_service import extract_text_from_path
+        ocr_result = await extract_text_from_path(image_path)
+        return {
+            "text": ocr_result.get("text", ""),
+            "description": ocr_result.get("description", ""),
+            "file_path": image_path
+        }
+
 async def refine_ocr_text(text: str) -> str:
     """
     Refines the OCR-extracted text using the Groq model to correct errors
     and improve readability while preserving the original content.
-    Uses context-aware correction without hardcoded replacements.
     """
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {
-                    "role": "system", 
-                    "content": "You are a text cleaning assistant that fixes OCR errors. "
-                             "Your task is to correct common OCR mistakes while preserving the original meaning and structure.\n"
-                             "GUIDELINES:\n"
-                             "1. Fix only obvious OCR errors (e.g., 'nat' → 'not', 'tne' → 'the', 'w1th' → 'with')\n"
-                             "2. Preserve proper nouns, names, and specialized terminology\n"
-                             "3. Maintain original punctuation and formatting\n"
-                             "4. Do NOT add any new information or change the meaning\n"
-                             "5. Return ONLY the corrected text, with no additional commentary"
-                },
-                {
-                    "role": "user",
-                    "content": f"Please correct any OCR errors in the following text while preserving its original meaning and structure. Return ONLY the corrected text with no additional commentary.\n\nTEXT TO CORRECT:\n{text}"
-                }
-            ],
-            temperature=0.1,  # Low temperature for consistent, minimal changes
-            top_p=0.9,       # Slightly higher top_p for better handling of OCR errors
-            max_tokens=2000,
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a text cleaning assistant that fixes OCR errors. "
+                                 "Your task is to correct common OCR mistakes while preserving original meaning.\n"
+                                 "1. Fix obvious OCR errors\n"
+                                 "2. Preserve proper nouns and technical terms\n"
+                                 "3. Return ONLY corrected text"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Correct OCR errors in the following text:\n\n{text}"
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=2000,
+            )
         )
         
         if response.choices and len(response.choices) > 0:
-            # Extract the cleaned text
             cleaned_text = response.choices[0].message.content.strip()
-            
-            # Basic post-processing to ensure clean output
-            cleaned_text = (
-                cleaned_text
-                .replace('```', '')  # Remove markdown code blocks
-                .replace('TEXT TO CORRECT:', '')  # Remove any prompt artifacts
-                .strip()
-            )
-            
-            # If the model somehow added commentary, try to extract just the corrected text
-            lines = cleaned_text.split('\n')
-            if len(lines) > 1 and ':' in lines[0]:
-                # If the first line looks like a header (e.g., 'Corrected text:'), skip it
-                return '\n'.join(lines[1:]).strip()
-            
-            return cleaned_text.strip() or text  # Fallback to original if empty
+            cleaned_text = re.sub(r"<think>.*?</think>", "", cleaned_text, flags=re.DOTALL).strip()
+            return cleaned_text or text
         
     except Exception as e:
-        print(f"Error refining OCR text: {str(e)}")
+        logger.error(f"Error refining OCR text: {str(e)}")
         return text
 
 async def describe_image_groq(image_path: str) -> str:
     """
-    Extracts and refines text from an image using OCR and Groq.
-    
-    Args:
-        image_path: Path to the image file
-        
-    Returns:
-        str: Both original and refined text from the image
+    Extracts and refines text from an image using Vision LLM.
     """
-    if not os.path.exists(image_path):
-        return f"Error: Image file not found at {os.path.abspath(image_path)}"
-    
-    try:
-        from services.ocr_service import extract_text_from_path
-        
-        print("Extracting text from image...")
-        # First, extract text using OCR
-        extracted_text = extract_text_from_path(image_path)
-        
-        if not extracted_text or extracted_text.startswith("[error]"):
-            raise ValueError(f"Failed to extract text from image: {extracted_text}")
-        
-        # Make a copy of the original text for output
-        original_text = extracted_text.strip()
-        
-        print("Refining extracted text...")
-        # Refine the OCR text to fix common errors
-        refined_text = await refine_ocr_text(extracted_text)
-        
-        # Return both original and refined text with clear separation
-        return f"ORIGINAL TEXT:\n{'-'*40}\n{original_text}\n\n\nREFINED TEXT:\n{'-'*40}\n{refined_text.strip()}"
-            
-    except Exception as e:
-        error_msg = f"[Error] {str(e)}"
-        print(error_msg)
-        raise  # Re-raise to trigger fallback
-            
-    except Exception as e:
-        error_msg = f"[Groq Error] {str(e)}"
-        print(error_msg)
-        raise  # Re-raise to trigger fallback
+    res = await extract_text_and_description_with_vision(image_path)
+    return f"ORIGINAL TEXT:\n{'-'*40}\n{res['text']}\n\n\nDESCRIPTION:\n{'-'*40}\n{res['description']}"
 
 async def describe_image_stub(path: str) -> str:
-    """
-    Async version: Extracts and processes text from an image.
-    Returns both original and refined text, with fallback to basic OCR if needed.
-    """
-    try:
-        # Get both original and refined text from the image
-        result = await describe_image_groq(path)
-        if not result:
-            raise ValueError("No text could be extracted from the image")
-        return result
-        
-    except Exception as e:
-        # On failure, try basic OCR without refinement
-        try:
-            from services.ocr_service import extract_text_from_path
-            # Since extract_text_from_path is synchronous, run it in a thread
-            import asyncio
-            loop = asyncio.get_event_loop()
-            extracted_text = await loop.run_in_executor(None, extract_text_from_path, path)
-            if not extracted_text:
-                raise ValueError("No text could be extracted")
-                
-            return f"ORIGINAL TEXT (FALLBACK):\n{'-'*40}\n{extracted_text.strip()}\n\n\nREFINED TEXT:\n{'-'*40}\n[Refinement not available - showing original text]"
-                
-        except Exception as oe:
-            return f"[Error] Failed to process image: {str(oe)}"
+    """Async stub for processing image description."""
+    return await describe_image_groq(path)
 
 def describe_image_stub_sync(path: str) -> str:
-    """
-    Synchronous version of describe_image_stub for use in non-async contexts.
-    """
-    import asyncio
+    """Synchronous stub for processing image description."""
     try:
         return asyncio.run(describe_image_stub(path))
-    except RuntimeError as e:
-        # Handle case where we're already in an event loop
+    except RuntimeError:
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(describe_image_stub(path))
-
-
-async def describe_image_groq(image_path: str) -> str:
-    """
-    Enhanced image description that handles both text and diagrams.
-    
-    Args:
-        image_path: Path to the image file
-        
-    Returns:
-        str: Formatted string with extracted text and/or diagram description
-    """
-    if not os.path.exists(image_path):
-        return f"Error: Image file not found at {os.path.abspath(image_path)}"
-    
-    try:
-        from services.ocr_service import extract_text_from_path
-        
-        # Check if image contains diagrams
-        if contains_diagram(image_path):
-            print("Diagram detected in image, using specialized processing...")
-            # Extract and refine text from diagram
-            extracted_text = await extract_diagram_text(image_path)
-            refined_text = await refine_ocr_text(extracted_text)
-            
-            # Get description of the diagram
-            try:
-                diagram_desc = await describe_with_groq(
-                    image_path,
-                    "Describe this diagram in detail, including the type of diagram, "
-                    "key elements, and their relationships. Be factual and objective."
-                )
-            except Exception as e:
-                print(f"Diagram description error: {str(e)}")
-                diagram_desc = "Could not generate description for the diagram."
-            
-            return (
-                "DIAGRAM DETECTED\n"
-                "---------------\n"
-                f"ORIGINAL TEXT:\n{'-'*40}\n{extracted_text}\n\n"
-                f"REFINED TEXT:\n{'-'*40}\n{refined_text}\n\n"
-                f"DIAGRAM DESCRIPTION:\n{'-'*40}\n{diagram_desc}\n"
-                "--------------\n"
-            )
-        else:
-            # Standard text extraction
-            print("Processing as standard text image...")
-            extracted_text = extract_text_from_path(image_path)
-            refined_text = await refine_ocr_text(extracted_text)
-            
-            return (
-                "TEXT EXTRACTION\n"
-                "--------------\n"
-                f"ORIGINAL TEXT:\n{'-'*40}\n{extracted_text}\n\n"
-                
-                f"REFINED TEXT:\n{'-'*40}\n{refined_text}\n\n"
-            )
-            
-    except Exception as e:
-        error_msg = f"[Error] {str(e)}"
-        print(error_msg)
-        raise
 
 async def describe_with_groq(image_path: str, prompt: str) -> str:
     """Helper function to get description from Groq API."""
     try:
-        # Read image as base64
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if not mime_type:
+            mime_type = "image/jpeg"
         with open(image_path, "rb") as img_file:
             img_base64 = base64.b64encode(img_file.read()).decode('utf-8')
         
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:image/jpeg;base64,{img_base64}"
-                        }
-                    ]
-                }
-            ],
-            max_tokens=1000,
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{img_base64}"}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=1000,
+            )
         )
-        
-        return response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content.strip()
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        return cleaned
     except Exception as e:
         return f"Could not generate description: {str(e)}"

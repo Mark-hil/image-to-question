@@ -37,29 +37,19 @@ class GenerateRequest(BaseModel):
     subject: Optional[str] = Field(None, description="Subject of the questions (e.g., 'Math', 'Science')")
 
 async def process_image(file_path: str) -> Dict[str, str]:
-    """Process an image file and return extracted text and description"""
+    """Process an image file and return extracted text and description using Vision LLM with fallback"""
     try:
-        # Use ultimate OCR service with severe error correction
-        text = await ultimate_ocr_service.extract_text_from_path(file_path)
+        res = await vision_service.extract_text_and_description_with_vision(file_path)
+        extracted_text = res.get("text", "").strip()
         
-        # Check if OCR extraction was successful
-        extracted_text = text.get("text", "").strip()
-        if not extracted_text or extracted_text.startswith("Error:") or "404" in extracted_text or "error" in extracted_text.lower():
-            raise ValueError(f"OCR extraction failed: {extracted_text}")
-        
-        # Get additional description if needed
-        if hasattr(vision_service, 'describe_image') and asyncio.iscoroutinefunction(vision_service.describe_image):
-            description_result = await vision_service.describe_image(file_path)
-            description = description_result.get('description', text.get('description', ''))
-        else:
-            description = text.get('description', '')
+        if not extracted_text or extracted_text.startswith("Error:"):
+            raise ValueError(f"Image extraction returned empty or invalid text: {extracted_text}")
         
         return {
             "text": extracted_text,
-            "description": description,
+            "description": res.get("description", ""),
             "file_path": file_path
         }
-        
     except Exception as e:
         logger.error(f"Error processing image {file_path}: {str(e)}")
         raise AppError(

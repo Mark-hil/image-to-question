@@ -146,28 +146,34 @@ docker build -t question-gen .
 docker run -p 8000:8000 question-gen
 ```
 
-## 📖 **API Usage**
+## 📖 **API Usage & Authentication**
 
-### **Upload and Process Image**
+For complete API specifications, see **[API Documentation](API_DOCUMENTATION.md)** or open **`http://localhost:8000/docs`** for interactive Swagger documentation.
+
+### **1. Register Free API Key ($0.00 / 1,000 generations/mo)**
 ```bash
-curl -X POST "http://localhost:8000/api/upload-and-generate" \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@your_image.png" \
+curl -X POST "http://localhost:8000/api/tenants/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Learning App",
+    "email": "dev@mylearningapp.com",
+    "tier": "free"
+  }'
+```
+
+### **2. Upload Image/PDF & Generate Questions**
+```bash
+curl -X POST "http://localhost:8000/api/generate/upload-and-generate" \
+  -H "X-API-Key: qg_live_your_secret_api_key" \
+  -F "files=@your_image.png" \
   -F "qtype=mcq" \
   -F "difficulty=medium" \
   -F "num_questions=5"
 ```
 
-### **Generate Questions from Text**
+### **3. Check Usage & Free Quota**
 ```bash
-curl -X POST "http://localhost:8000/api/generate-questions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Your text content here...",
-    "qtype": "mcq",
-    "difficulty": "medium",
-    "num_questions": 3
-  }'
+curl -X GET "http://localhost:8000/api/tenants/{tenant_id}/usage"
 ```
 
 ## 🧪 **Testing**

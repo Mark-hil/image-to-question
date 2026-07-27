@@ -30,7 +30,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
-from routers import upload, generate, upload_and_generate, questions
+from routers import upload, generate, upload_and_generate, questions, tenant, billing
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,7 +66,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error closing database connections: {e}")
 
-app = FastAPI(lifespan=lifespan)
+from fastapi.openapi.utils import get_openapi
+
+app = FastAPI(
+    title="AI Image-to-Question & Question Bank API",
+    description="Multimodal Vision LLM & OCR Question Generation Platform. Free API access enabled.",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="AI Image-to-Question & Question Bank API",
+        version="1.0.0",
+        description="Multimodal OCR and AI Question Generation API. Free API Keys available at `/api/tenants/register`.",
+        routes=app.routes,
+    )
+    openapi_schema["components"]["securitySchemes"] = {
+        "APIKeyHeader": {
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header",
+            "description": "Enter your API Key (e.g., qg_live_...)"
+        }
+    }
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # Maximum file sizes in bytes
 MAX_IMAGE_SIZE = 3 * 1024 * 1024  # 3 MB
@@ -193,6 +222,16 @@ app.include_router(
     questions.router, 
     prefix="/api", 
     tags=["Questions"]
+)
+app.include_router(
+    tenant.router,
+    prefix="/api/tenants",
+    tags=["Tenants & API Keys"]
+)
+app.include_router(
+    billing.router,
+    prefix="/api/billing",
+    tags=["Billing & Payments (Paystack)"]
 )
 
 # Health check endpoint

@@ -55,20 +55,22 @@ if "postgresql" in DATABASE_URL:
         "command_timeout": 30
     })
 
-# Create async engine with proper configuration
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,  # Disable echo in production
-    future=True,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    poolclass=NullPool if "sqlite" in DATABASE_URL else None,
-    connect_args=connect_args or None,
-    # Pool settings for better connection management
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,  # Timeout for getting connection from pool
-)
+engine_kwargs = {
+    "echo": False,
+    "future": True,
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "connect_args": connect_args,
+}
+
+if "sqlite" in DATABASE_URL:
+    engine_kwargs["poolclass"] = NullPool
+else:
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 10
+    engine_kwargs["pool_timeout"] = 30
+
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 
 # Async session factory
 async_session_maker = async_sessionmaker(

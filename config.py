@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     TESSERACT_CMD: Optional[str] = None
     
+    # Paystack Billing Configuration
+    PAYSTACK_SECRET_KEY: Optional[str] = None
+    PAYSTACK_PUBLIC_KEY: Optional[str] = None
+    
     # OCR settings (used in some legacy services)
     OCR_ENGINE: str = "paddle"
     PADDLE_USE_GPU: bool = False
