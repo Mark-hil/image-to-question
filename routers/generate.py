@@ -25,16 +25,39 @@ import schemas
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-from utils.file import ALLOWED_EXTENSIONS, get_file_extension
+from utils.file import ALLOWED_EXTENSIONS, get_file_extension, save_upload_file
+from fastapi import File
+
+@router.post("/inspect-pdf")
+async def inspect_pdf(file: UploadFile = File(...)):
+    """
+    Inspect an uploaded PDF or PPTX presentation to extract total page/slide count and chapter/slide titles.
+    """
+    if not file or not file.filename:
+        raise AppError(status_code=400, error_code="NO_FILE", message="No file provided.")
+    
+    ext = get_file_extension(file.filename).lower()
+    if ext not in ['pdf', 'pptx', 'ppt']:
+        raise AppError(status_code=400, error_code="INVALID_FILE_TYPE", message="File must be a PDF or PowerPoint document.")
+    
+    saved_path = await save_upload_file(file, "uploads")
+    
+    if ext in ['pptx', 'ppt']:
+        from services.pptx_service import inspect_pptx_slides
+        return inspect_pptx_slides(saved_path)
+    
+    res = pdf_service.extract_pdf_toc(saved_path)
+    return res
 
 class GenerateRequest(BaseModel):
     file_paths: List[str] = Field(..., description="List of file paths to process")
     qtype: str = Field(..., description="Type of questions to generate (e.g., 'mcq', 'true_false')")
     difficulty: str = Field(..., description="Difficulty level (e.g., 'easy', 'medium', 'hard')")
     teacher_id: Optional[str] = Field(None, description="Optional teacher ID")
-    num_questions: int = Field(3, ge=1, le=20, description="Number of questions to generate (1-20)")
+    num_questions: int = Field(3, ge=1, le=100, description="Number of questions to generate (1-100)")
     class_id: Optional[str] = Field(None, description="Class/grade level (e.g., 'Grade 5', 'Class 10')")
     subject: Optional[str] = Field(None, description="Subject of the questions (e.g., 'Math', 'Science')")
+    page_range: Optional[str] = Field(None, description="Optional page range, e.g. '8-20'")
 
 async def process_image(file_path: str) -> Dict[str, str]:
     """Process an image file and return extracted text and description using Vision LLM with fallback"""
@@ -58,15 +81,15 @@ async def process_image(file_path: str) -> Dict[str, str]:
             message=f"Failed to process image: {str(e)}"
         )
 
-async def process_pdf(file_path: str) -> Dict[str, str]:
-    """Process a PDF file and return extracted text"""
+async def process_pdf(file_path: str, page_range: Optional[str] = None) -> Dict[str, str]:
+    """Process a PDF file and return extracted text with optional page range filtering"""
     try:
-        # Use ultimate OCR service with severe error correction
-        text = await ultimate_ocr_service.extract_text_from_path(file_path)
+        # Use ultimate OCR service with severe error correction and page range filtering
+        text = await ultimate_ocr_service.extract_text_from_path(file_path, page_range=page_range)
         
         # Check if OCR extraction was successful
         extracted_text = text.get("text", "").strip()
-        if not extracted_text or extracted_text.startswith("Error:") or "404" in extracted_text or "error" in extracted_text.lower():
+        if not extracted_text or extracted_text.startswith("Error:") or extracted_text.startswith("[error]") or extracted_text.lower().startswith("error:"):
             raise ValueError(f"OCR extraction failed: {extracted_text}")
         
         return {
@@ -117,7 +140,7 @@ async def generate_from_files(
             if ext in {"png", "jpg", "jpeg", "gif"}:
                 tasks.append(process_image(file_path))
             elif ext == "pdf":
-                tasks.append(process_pdf(file_path))
+                tasks.append(process_pdf(file_path, page_range=req.page_range))
         
         # Wait for all files to be processed
         results = await asyncio.gather(*tasks, return_exceptions=True)

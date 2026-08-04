@@ -106,10 +106,35 @@ async def init_db() -> None:
                 await conn.execute(text("SELECT 1"))
                 logger.info("Database connection successful")
                 
-            # Create tables
+            # Create tables (Import models to register them on Base.metadata)
+            import models  # noqa: F401
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-                logger.info("✅ Database tables created successfully")
+                # Auto-migrate missing columns for existing SQLite/Postgres tables
+                try:
+                    await conn.execute(text("ALTER TABLE questions ADD COLUMN blooms_level VARCHAR(30) DEFAULT 'Understand'"))
+                    logger.info("Added missing blooms_level column to questions table")
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    await conn.execute(text("ALTER TABLE quiz_questions ADD COLUMN blooms_level VARCHAR(30) DEFAULT 'Understand'"))
+                    logger.info("Added missing blooms_level column to quiz_questions table")
+                except Exception:
+                    pass  # Column already exists
+
+                try:
+                    await conn.execute(text("ALTER TABLE quizzes ADD COLUMN class_id VARCHAR(100)"))
+                    logger.info("Added missing class_id column to quizzes table")
+                except Exception:
+                    pass  # Column already exists
+
+                try:
+                    await conn.execute(text("ALTER TABLE quiz_questions ADD COLUMN class_id VARCHAR(100)"))
+                    logger.info("Added missing class_id column to quiz_questions table")
+                except Exception:
+                    pass  # Column already exists
+
+                logger.info("✅ Database tables created/migrated successfully")
                 return
                 
         except asyncio.TimeoutError as e:

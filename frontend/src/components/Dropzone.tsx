@@ -1,37 +1,58 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, X, CheckCircle, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { UploadCloud, FileText, X, CheckCircle, Image as ImageIcon, Sparkles, Plus } from 'lucide-react';
 
 interface DropzoneProps {
-  selectedFile: File | null;
-  onFileSelect: (file: File | null) => void;
+  selectedFiles?: File[];
+  onFilesChange?: (files: File[]) => void;
+  // Legacy single file props fallback
+  selectedFile?: File | null;
+  onFileSelect?: (file: File | null) => void;
 }
 
-export const Dropzone: React.FC<DropzoneProps> = ({ selectedFile, onFileSelect }) => {
+export const Dropzone: React.FC<DropzoneProps> = ({
+  selectedFiles,
+  onFilesChange,
+  selectedFile,
+  onFileSelect
+}) => {
   const [isDragOver, setIsDragOver] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = (file: File | null) => {
-    if (!file) {
-      onFileSelect(null);
-      setPreviewUrl(null);
-      return;
-    }
+  // Normalize files array from props
+  const files: File[] = selectedFiles 
+    ? selectedFiles 
+    : selectedFile 
+    ? [selectedFile] 
+    : [];
 
-    if (file.type.startsWith('image/')) {
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-    } else {
-      setPreviewUrl(null);
+  const updateFiles = (newFiles: File[]) => {
+    if (onFilesChange) {
+      onFilesChange(newFiles);
     }
-    onFileSelect(file);
+    if (onFileSelect) {
+      onFileSelect(newFiles.length > 0 ? newFiles[0] : null);
+    }
+  };
+
+  const handleAddFiles = (incomingFileList: FileList | null) => {
+    if (!incomingFileList || incomingFileList.length === 0) return;
+    const incomingArr = Array.from(incomingFileList);
+    // Combine with existing avoiding duplicate names
+    const existingNames = new Set(files.map(f => `${f.name}_${f.size}`));
+    const uniqueIncoming = incomingArr.filter(f => !existingNames.has(`${f.name}_${f.size}`));
+    updateFiles([...files, ...uniqueIncoming]);
+  };
+
+  const handleRemoveFile = (index: number) => {
+    const updated = files.filter((_, i) => i !== index);
+    updateFiles(updated);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleAddFiles(e.dataTransfer.files);
     }
   };
 
@@ -40,18 +61,23 @@ export const Dropzone: React.FC<DropzoneProps> = ({ selectedFile, onFileSelect }
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
-      onClick={() => !selectedFile && fileInputRef.current?.click()}
+      onClick={() => {
+        // If clicking empty dropzone background and no files attached
+        if (files.length === 0) {
+          fileInputRef.current?.click();
+        }
+      }}
       style={{
-        border: `2px dashed ${isDragOver ? '#6366F1' : selectedFile ? '#10B981' : 'rgba(255, 255, 255, 0.14)'}`,
+        border: `2px dashed ${isDragOver ? '#6366F1' : files.length > 0 ? '#10B981' : 'rgba(255, 255, 255, 0.14)'}`,
         background: isDragOver 
           ? 'rgba(99, 102, 241, 0.12)' 
-          : selectedFile 
-          ? 'rgba(16, 185, 129, 0.06)' 
+          : files.length > 0 
+          ? 'rgba(16, 185, 129, 0.04)' 
           : 'rgba(15, 23, 42, 0.5)',
         borderRadius: '20px',
-        padding: '36px 24px',
+        padding: files.length > 0 ? '24px 20px' : '36px 24px',
         textAlign: 'center',
-        cursor: selectedFile ? 'default' : 'pointer',
+        cursor: files.length > 0 ? 'default' : 'pointer',
         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
         position: 'relative',
         boxShadow: isDragOver ? '0 0 30px rgba(99, 102, 241, 0.3)' : 'none'
@@ -60,53 +86,129 @@ export const Dropzone: React.FC<DropzoneProps> = ({ selectedFile, onFileSelect }
       <input
         type="file"
         ref={fileInputRef}
-        onChange={(e) => e.target.files && handleFile(e.target.files[0])}
-        accept="image/*,.pdf"
+        onChange={(e) => {
+          handleAddFiles(e.target.files);
+          if (e.target) e.target.value = '';
+        }}
+        accept="image/*,.pdf,.pptx,.ppt"
+        multiple
         style={{ display: 'none' }}
       />
 
-      {selectedFile ? (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-          {previewUrl ? (
-            <div style={{ position: 'relative' }}>
-              <img
-                src={previewUrl}
-                alt="Worksheet Preview"
-                style={{ 
-                  maxHeight: '200px', 
-                  maxWidth: '100%',
-                  borderRadius: '14px', 
-                  border: '1px solid rgba(255, 255, 255, 0.15)', 
-                  objectFit: 'contain',
-                  boxShadow: '0 10px 30px rgba(0, 0, 0, 0.4)'
-                }}
-              />
-              <span className="badge badge-emerald" style={{ position: 'absolute', top: '10px', right: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
-                <Sparkles size={12} /> Vision Ready
+      {files.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="badge badge-emerald">
+                <CheckCircle size={14} /> {files.length} Document{files.length > 1 ? 's' : ''} Attached
+              </span>
+              <span className="badge badge-indigo">
+                <Sparkles size={12} /> Vision & OCR Ready
               </span>
             </div>
-          ) : (
-            <div style={{ padding: '24px', background: 'rgba(99, 102, 241, 0.15)', borderRadius: '16px', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
-              <FileText size={56} color="#818CF8" />
-            </div>
-          )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <span className="badge badge-emerald" style={{ padding: '6px 12px', fontSize: '0.82rem' }}>
-              <CheckCircle size={14} /> Ready
-            </span>
-            <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#FFF' }}>{selectedFile.name}</span>
-            <span style={{ color: '#64748B', fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
-              ({(selectedFile.size / (1024 * 1024)).toFixed(2)} MB)
-            </span>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleFile(null); }}
-              className="btn-danger"
-              style={{ padding: '6px 12px', fontSize: '0.82rem', marginLeft: '6px' }}
-              title="Remove File"
-            >
-              <X size={14} /> Remove
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
+                }}
+                className="btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Plus size={14} /> Add More Files
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateFiles([]);
+                }}
+                className="btn-danger"
+                style={{ padding: '6px 12px', fontSize: '0.82rem' }}
+              >
+                Clear All
+              </button>
+            </div>
+          </div>
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gap: '12px',
+            maxHeight: '260px',
+            overflowY: 'auto',
+            paddingRight: '4px'
+          }}>
+            {files.map((file, idx) => {
+              const isImage = file.type.startsWith('image/');
+              return (
+                <div
+                  key={`${file.name}_${idx}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'rgba(30, 41, 59, 0.7)',
+                    padding: '10px 14px',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    gap: '10px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+                    <div style={{
+                      padding: '8px',
+                      background: isImage ? 'rgba(99, 102, 241, 0.2)' : 'rgba(168, 85, 247, 0.2)',
+                      borderRadius: '8px',
+                      color: isImage ? '#818CF8' : '#C084FC',
+                      display: 'flex'
+                    }}>
+                      {isImage ? <ImageIcon size={20} /> : <FileText size={20} />}
+                    </div>
+                    <div style={{ textAlign: 'left', overflow: 'hidden' }}>
+                      <p style={{
+                        fontSize: '0.88rem',
+                        fontWeight: 600,
+                        color: '#FFF',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        margin: 0
+                      }}>
+                        {file.name}
+                      </p>
+                      <span style={{ fontSize: '0.75rem', color: '#64748B', fontFamily: 'var(--font-mono)' }}>
+                        {(file.size / (1024 * 1024)).toFixed(2)} MB
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveFile(idx);
+                    }}
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.15)',
+                      border: 'none',
+                      color: '#EF4444',
+                      borderRadius: '6px',
+                      padding: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    title="Remove file"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : (
@@ -123,17 +225,18 @@ export const Dropzone: React.FC<DropzoneProps> = ({ selectedFile, onFileSelect }
           </div>
           <div>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '6px' }} className="text-gradient">
-              Drag & Drop Worksheet Image or PDF
+              Drag & Drop Worksheets, PDFs, or PowerPoint Slides
             </h3>
-            <p style={{ fontSize: '0.88rem', color: '#94A3B8', maxWidth: '420px', margin: '0 auto 14px auto' }}>
-              Upload textbook pages, diagrams, or PDF worksheets for automatic Vision AI question extraction.
+            <p style={{ fontSize: '0.88rem', color: '#94A3B8', maxWidth: '440px', margin: '0 auto 14px auto' }}>
+              Upload textbook pages, image diagrams, PDF documents, or PPTX presentations for combined AI extraction.
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
             <span className="badge badge-indigo"><ImageIcon size={12} /> PNG / JPG</span>
-            <span className="badge badge-purple"><FileText size={12} /> PDF Document</span>
-            <span className="badge badge-emerald"><Sparkles size={12} /> Groq Vision VLM</span>
+            <span className="badge badge-purple"><FileText size={12} /> PDF Worksheets</span>
+            <span className="badge badge-indigo"><FileText size={12} /> PPTX Slides</span>
+            <span className="badge badge-emerald"><Sparkles size={12} /> Multi-Doc AI</span>
           </div>
         </div>
       )}

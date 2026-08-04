@@ -4,7 +4,7 @@ import { QuestionCard } from '../components/QuestionCard';
 import { ExportModal } from '../components/ExportModal';
 import { api } from '../services/api';
 import type { QuestionData } from '../services/api';
-import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Award } from 'lucide-react';
+import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Loader2, Zap, Brain, Target, Layers } from 'lucide-react';
 
 interface GeneratorPageProps {
   user: any;
@@ -19,47 +19,184 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
   onOpenAuth,
   onNavigateToLibrary
 }) => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [qtype, setQtype] = useState<string>('mcq');
   const [difficulty, setDifficulty] = useState<string>('medium');
+  const [bloomsLevel, setBloomsLevel] = useState<string>('all');
   const [numQuestions, setNumQuestions] = useState<number>(10);
   const [subject, setSubject] = useState<string>('Biology');
+  const [classId, setClassId] = useState<string>('Grade 10');
   const [quizTitle, setQuizTitle] = useState<string>('My Quiz Bank');
+  const [pageRange, setPageRange] = useState<string>('');
+  const [detectedChapters, setDetectedChapters] = useState<Array<{ title: string; range: string; start_page: number; end_page: number }>>([]);
+  const [pdfTotalPages, setPdfTotalPages] = useState<number>(0);
+  const [inspectingPdf, setInspectingPdf] = useState<boolean>(false);
+  const [selectedChapterRange, setSelectedChapterRange] = useState<string | null>(null);
+  const [useAsyncPipeline, setUseAsyncPipeline] = useState<boolean>(true);
+
+  const handleFilesChange = async (files: File[]) => {
+    setSelectedFiles(files);
+    setDetectedChapters([]);
+    setPdfTotalPages(0);
+    setSelectedChapterRange(null);
+
+    const docFile = files.find(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.pdf') || name.endsWith('.pptx') || name.endsWith('.ppt');
+    });
+
+    if (docFile) {
+      setInspectingPdf(true);
+      try {
+        const res = await api.inspectPdf(docFile);
+        if (res) {
+          setPdfTotalPages(res.total_pages || 0);
+          if (res.chapters && res.chapters.length > 0) {
+            setDetectedChapters(res.chapters);
+          }
+        }
+      } catch (e) {
+        console.warn('Document TOC inspection note:', e);
+      } finally {
+        setInspectingPdf(false);
+      }
+    }
+  };
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [questions, setQuestions] = useState<QuestionData[]>([]);
 
+  // Generation Progress Bar State
+  const [progressModalOpen, setProgressModalOpen] = useState<boolean>(false);
+  const [progressPct, setProgressPct] = useState<number>(0);
+  const [progressStage, setProgressStage] = useState<string>('Initializing pipeline...');
+  const [progressStatus, setProgressStatus] = useState<string>('processing');
+
   const [savedQuizId, setSavedQuizId] = useState<string | undefined>(undefined);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
+  const pollTaskStatus = async (taskId: string) => {
+    let completed = false;
+    while (!completed) {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        const res = await api.getTaskStatus(taskId);
+        setProgressPct(res.progress || 0);
+        setProgressStage(res.stage || 'Processing document extractions...');
+        setProgressStatus(res.status);
+
+        if (res.status === 'completed') {
+          completed = true;
+          if (res.questions && res.questions.length > 0) {
+            const formatted = res.questions.map(q => ({ ...q, class_id: q.class_id || classId }));
+            setQuestions(formatted);
+            if (selectedFiles.length > 0) {
+              setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
+            }
+          }
+          setTimeout(() => {
+            setProgressModalOpen(false);
+            setLoading(false);
+          }, 600);
+        } else if (res.status === 'failed') {
+          completed = true;
+          setError(res.error || 'Async generation task failed.');
+          setProgressModalOpen(false);
+          setLoading(false);
+        }
+      } catch (err: any) {
+        completed = true;
+        setError(err.message || 'Error checking task status.');
+        setProgressModalOpen(false);
+        setLoading(false);
+      }
+    }
+  };
+
   const handleGenerate = async () => {
-    if (!selectedFile) {
-      setError('Please upload a worksheet photo or PDF document first.');
+    if (selectedFiles.length === 0) {
+      setError('Please select at least one document or image file.');
       return;
     }
 
-    setError(null);
     setLoading(true);
-    setSaveSuccess(false);
+    setError(null);
+    setProgressModalOpen(true);
+    setProgressPct(5);
+    setProgressStatus('processing');
 
-    try {
-      const generated = await api.uploadAndGenerate(
-        selectedFile,
-        qtype,
-        difficulty,
-        numQuestions,
-        subject
-      );
-      setQuestions(generated);
-      if (selectedFile.name) {
-        setQuizTitle(selectedFile.name.replace(/\.[^/.]+$/, "") + " Quiz");
+    if (useAsyncPipeline) {
+      setProgressStage('Queueing documents into background pipeline...');
+
+      try {
+        const result = await api.generateAsync(
+          selectedFiles,
+          qtype,
+          difficulty,
+          numQuestions,
+          subject,
+          undefined,
+          bloomsLevel,
+          pageRange
+        );
+        pollTaskStatus(result.task_id);
+      } catch (err: any) {
+        setError(err.message || 'Failed to start background question pipeline.');
+        setProgressModalOpen(false);
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err.message || 'Error generating questions.');
-    } finally {
-      setLoading(false);
+    } else {
+      // Synchronous flow with animated progress increments
+      try {
+        setProgressStage('Reading source documents & applying Groq Vision VLM...');
+        setProgressPct(25);
+        
+        const progTimer1 = setTimeout(() => {
+          setProgressPct(60);
+          setProgressStage(`Generating questions with Bloom's Taxonomy: ${bloomsLevel.toUpperCase()}...`);
+        }, 1500);
+
+        const progTimer2 = setTimeout(() => {
+          setProgressPct(85);
+          setProgressStage('Formatting JSON structure & answer rationale...');
+        }, 3500);
+
+        const generated = await api.uploadAndGenerate(
+          selectedFiles,
+          qtype,
+          difficulty,
+          numQuestions,
+          subject,
+          undefined,
+          classId,
+          bloomsLevel,
+          pageRange
+        );
+
+        clearTimeout(progTimer1);
+        clearTimeout(progTimer2);
+
+        setProgressPct(100);
+        setProgressStage('Generation Complete!');
+        setProgressStatus('completed');
+
+        const formatted = generated.map(q => ({ ...q, class_id: q.class_id || classId }));
+        setQuestions(formatted);
+        if (selectedFiles.length > 0) {
+          setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
+        }
+
+        setTimeout(() => {
+          setProgressModalOpen(false);
+          setLoading(false);
+        }, 600);
+      } catch (err: any) {
+        setError(err.message || 'Error generating questions.');
+        setProgressModalOpen(false);
+        setLoading(false);
+      }
     }
   };
 
@@ -80,13 +217,24 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
     }
 
     try {
-      const saved = await api.saveQuiz(token, quizTitle, subject, selectedFile?.name, questions);
+      const sourceName = selectedFiles.map(f => f.name).join(', ');
+      const saved = await api.saveQuiz(token, quizTitle, subject, sourceName, questions, classId);
       setSavedQuizId(saved.id);
       setSaveSuccess(true);
     } catch (err: any) {
       setError(err.message || 'Failed to save quiz bank.');
     }
   };
+
+  const bloomsLevelsList = [
+    { id: 'all', label: 'All Levels', desc: 'Balanced Mix', color: '#818CF8' },
+    { id: 'Remember', label: 'Remember', desc: 'Recall facts', color: '#93C5FD' },
+    { id: 'Understand', label: 'Understand', desc: 'Explain ideas', color: '#60A5FA' },
+    { id: 'Apply', label: 'Apply', desc: 'Use info', color: '#34D399' },
+    { id: 'Analyze', label: 'Analyze', desc: 'Draw connections', color: '#FBBF24' },
+    { id: 'Evaluate', label: 'Evaluate', desc: 'Justify stance', color: '#F97316' },
+    { id: 'Create', label: 'Create', desc: 'Produce original work', color: '#F43F5E' }
+  ];
 
   return (
     <div className="responsive-padding" style={{ width: '100%', maxWidth: '100%', padding: '24px 36px 50px 36px' }}>
@@ -102,29 +250,29 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818CF8', fontWeight: 700, fontSize: '0.85rem', textTransform: 'uppercase', marginBottom: '10px', flexWrap: 'wrap' }}>
           <span className="badge badge-indigo"><Sparkles size={12} /> Groq Vision Qwen3.6 VLM</span>
-          <span className="badge badge-emerald"><Award size={12} /> 100% Curriculum Aligned</span>
+          <span className="badge badge-purple"><Layers size={12} /> Multi-Document Batch Processing</span>
+          <span className="badge badge-emerald"><Target size={12} /> Granular Bloom's Taxonomy</span>
         </div>
         <h2 style={{ fontSize: '2.3rem', fontWeight: 800, marginBottom: '10px' }} className="text-gradient">
           Worksheet & Textbook <span className="text-gradient-indigo">AI Question Studio</span>
         </h2>
         <p style={{ color: '#94A3B8', maxWidth: '720px', fontSize: '1rem', lineHeight: 1.6 }}>
-          Transform any textbook photo, diagram, or PDF worksheet into standard-aligned question banks (MCQs, Short Answer, True/False) ready for MS Word (.docx) or Canvas LMS export.
+          Upload multiple textbook pages or PDF documents simultaneously. Tailor targeted cognitive levels with Bloom's Taxonomy for MS Word (.docx) or Canvas LMS package exports.
         </p>
       </div>
 
       {/* Upload & Controls Grid */}
       <div className="responsive-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '28px', marginBottom: '36px' }}>
 
-        
-        {/* Left: Dropzone Panel */}
+        {/* Left: Multi-Document Dropzone Panel */}
         <div className="glass-panel" style={{ padding: '28px' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <BookOpen size={20} color="#818CF8" /> 1. Upload Source File
+            <BookOpen size={20} color="#818CF8" /> 1. Upload Source Documents
           </h3>
-          <Dropzone selectedFile={selectedFile} onFileSelect={setSelectedFile} />
+          <Dropzone selectedFiles={selectedFiles} onFilesChange={handleFilesChange} />
         </div>
 
-        {/* Right: Controls Panel */}
+        {/* Right: Options Panel */}
         <div className="glass-panel" style={{ padding: '28px' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Sliders size={20} color="#818CF8" /> 2. Question Options
@@ -194,17 +342,190 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             </div>
           </div>
 
-          {/* Subject input */}
-          <div className="form-group" style={{ marginBottom: '20px' }}>
-            <label className="form-label">Subject Tag / Topic</label>
-            <input
-              type="text"
-              className="input-field"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="e.g. Physics, Biology, World History"
-            />
+          {/* Bloom's Taxonomy Filter Component */}
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <label className="form-label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Target size={14} color="#818CF8" /> Bloom's Taxonomy Cognitive Level
+              </label>
+              <span style={{ fontSize: '0.75rem', color: '#818CF8', fontWeight: 600 }}>
+                Default: All Levels
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(105px, 1fr))', gap: '8px' }}>
+              {bloomsLevelsList.map((item) => {
+                const isSelected = bloomsLevel === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setBloomsLevel(item.id)}
+                    style={{
+                      padding: '8px 6px',
+                      borderRadius: '10px',
+                      border: `1px solid ${isSelected ? item.color : 'rgba(255, 255, 255, 0.08)'}`,
+                      background: isSelected ? `${item.color}25` : 'rgba(255, 255, 255, 0.02)',
+                      color: isSelected ? '#FFF' : '#94A3B8',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      textAlign: 'center'
+                    }}
+                    title={item.desc}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '0.8rem', color: isSelected ? item.color : '#CBD5E1' }}>
+                      {item.label}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: isSelected ? '#E2E8F0' : '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {item.desc}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
+
+          {/* Subject, Class & PDF Page Range inputs */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '14px', marginBottom: '20px' }}>
+            <div className="form-group">
+              <label className="form-label">Subject Tag / Topic</label>
+              <input
+                type="text"
+                className="input-field"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="e.g. Physics, Biology"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Class Tag / Grade</label>
+              <input
+                type="text"
+                className="input-field"
+                value={classId}
+                onChange={(e) => setClassId(e.target.value)}
+                placeholder="e.g. Grade 10, Class 5A"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <BookOpen size={14} color="#818CF8" /> Page / Chapter Range
+              </label>
+              <input
+                type="text"
+                className="input-field"
+                value={pageRange}
+                onChange={(e) => {
+                  setPageRange(e.target.value);
+                  setSelectedChapterRange(null);
+                }}
+                placeholder="e.g. 8-20, 15, or blank for all"
+                style={{
+                  borderColor: pageRange ? '#6366F1' : undefined,
+                  background: pageRange ? 'rgba(99, 102, 241, 0.08)' : undefined
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Detected PDF Chapter Pills (Option C - Hybrid TOC Extraction) */}
+          {inspectingPdf && (
+            <div style={{ marginBottom: '16px', fontSize: '0.8rem', color: '#818CF8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Loader2 size={14} className="animate-spin" /> Auto-detecting PDF Table of Contents chapters...
+            </div>
+          )}
+
+          {/* Detected PDF Chapter Pills or Quick Page Presets */}
+          {detectedChapters.length > 0 ? (
+            <div style={{ marginBottom: '20px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#A5B4FC', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <BookOpen size={14} color="#818CF8" /> Auto-Detected Chapters ({detectedChapters.length})
+                </span>
+                <span style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 400 }}>Click pill to set page range</span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', maxHeight: '120px', overflowY: 'auto', paddingRight: '4px' }}>
+                {detectedChapters.map((ch, idx) => {
+                  const isSelected = selectedChapterRange === ch.range || pageRange === ch.range;
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedChapterRange(null);
+                          setPageRange('');
+                        } else {
+                          setSelectedChapterRange(ch.range);
+                          setPageRange(ch.range);
+                        }
+                      }}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: '8px',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        border: '1px solid',
+                        borderColor: isSelected ? '#6366F1' : 'rgba(255, 255, 255, 0.12)',
+                        background: isSelected ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.04)',
+                        color: isSelected ? '#FFF' : '#94A3B8',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <span>{ch.title}</span>
+                      <span style={{ fontSize: '0.7rem', color: isSelected ? '#C7D2FE' : '#64748B', background: 'rgba(0,0,0,0.2)', padding: '2px 5px', borderRadius: '4px' }}>
+                        p.{ch.range}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : pdfTotalPages > 0 ? (
+            <div style={{ marginBottom: '20px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#A5B4FC', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Layers size={14} color="#818CF8" /> Scanned / Image PDF ({pdfTotalPages} Total Pages)
+                </span>
+                <span style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 400 }}>Click preset pill or type range above</span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {Array.from({ length: Math.min(12, Math.ceil(pdfTotalPages / 15)) }, (_, i) => {
+                  const chunkSize = pdfTotalPages > 100 ? 20 : 10;
+                  const startP = i * chunkSize + 1;
+                  if (startP > pdfTotalPages) return null;
+                  const endP = Math.min(pdfTotalPages, (i + 1) * chunkSize);
+                  const rng = `${startP}-${endP}`;
+                  const isSelected = pageRange === rng;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setPageRange(isSelected ? '' : rng)}
+                      style={{
+                        padding: '5px 11px',
+                        borderRadius: '8px',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        border: '1px solid',
+                        borderColor: isSelected ? '#6366F1' : 'rgba(255, 255, 255, 0.12)',
+                        background: isSelected ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.04)',
+                        color: isSelected ? '#FFF' : '#94A3B8',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      Pages {rng}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {/* Question Count Selector */}
           <div style={{ marginBottom: '24px' }}>
@@ -267,15 +588,66 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             </div>
           </div>
 
+          {/* Async Background Task Toggle */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 16px',
+            borderRadius: '14px',
+            background: 'rgba(99, 102, 241, 0.08)',
+            border: '1px solid rgba(99, 102, 241, 0.2)',
+            marginBottom: '20px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Zap size={18} color="#818CF8" />
+              <div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#F8FAFC' }}>
+                  Async Background Task Pipeline
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>
+                  Prevents timeouts for large PDFs & 50+ question batches
+                </div>
+              </div>
+            </div>
+            <label style={{ position: 'relative', display: 'inline-block', width: '44px', height: '24px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={useAsyncPipeline}
+                onChange={(e) => setUseAsyncPipeline(e.target.checked)}
+                style={{ opacity: 0, width: 0, height: 0 }}
+              />
+              <span style={{
+                position: 'absolute',
+                top: 0, left: 0, right: 0, bottom: 0,
+                backgroundColor: useAsyncPipeline ? '#6366F1' : '#334155',
+                borderRadius: '24px',
+                transition: '0.3s'
+              }}>
+                <span style={{
+                  position: 'absolute',
+                  content: '""',
+                  height: '18px', width: '18px',
+                  left: useAsyncPipeline ? '22px' : '3px',
+                  bottom: '3px',
+                  backgroundColor: '#FFF',
+                  borderRadius: '50%',
+                  transition: '0.3s',
+                  boxShadow: '0 2px 5px rgba(0,0,0,0.3)'
+                }} />
+              </span>
+            </label>
+          </div>
+
           <button
             onClick={handleGenerate}
-            disabled={loading || !selectedFile}
+            disabled={loading || selectedFiles.length === 0}
             className="btn-primary"
             style={{ width: '100%', justifyContent: 'center', padding: '15px', borderRadius: '14px', fontSize: '1rem' }}
           >
             {loading ? (
               <>
-                <span className="spinner">✨</span> Vision AI Extracting & Generating ({numQuestions} Qs)...
+                <Loader2 size={18} className="spinner" /> Generating Questions...
               </>
             ) : (
               <>
@@ -347,7 +719,6 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 </button>
               )}
 
-
               <button
                 onClick={() => setIsExportOpen(true)}
                 className="btn-primary"
@@ -369,6 +740,111 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 onDelete={() => handleDeleteQuestion(idx)}
               />
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Animated Visual Progress Bar Modal */}
+      {progressModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(9, 13, 22, 0.8)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '20px'
+        }}>
+          <div className="glass-panel" style={{
+            padding: '32px 36px',
+            maxWidth: '500px',
+            width: '100%',
+            textAlign: 'center',
+            borderRadius: '24px',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
+            boxShadow: '0 25px 50px rgba(0, 0, 0, 0.5)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+              {progressStatus === 'completed' ? (
+                <div style={{
+                  padding: '16px',
+                  borderRadius: '50%',
+                  background: 'rgba(16, 185, 129, 0.18)',
+                  border: '1px solid rgba(16, 185, 129, 0.4)'
+                }}>
+                  <CheckCircle size={44} color="#10B981" />
+                </div>
+              ) : (
+                <div style={{
+                  padding: '16px',
+                  borderRadius: '50%',
+                  background: 'rgba(99, 102, 241, 0.18)',
+                  border: '1px solid rgba(99, 102, 241, 0.4)'
+                }} className="pulse-glow">
+                  <Brain size={44} color="#818CF8" className="spinner" />
+                </div>
+              )}
+            </div>
+
+            <h3 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#F8FAFC', marginBottom: '6px' }}>
+              Generating Question Bank
+            </h3>
+            
+            <p style={{ color: '#94A3B8', fontSize: '0.88rem', marginBottom: '24px', lineHeight: 1.4, minHeight: '40px' }}>
+              {progressStage}
+            </p>
+
+            {/* Animated Progress Bar */}
+            <div style={{ width: '100%', marginBottom: '12px' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '8px',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                color: '#CBD5E1'
+              }}>
+                <span>Processing Pipeline</span>
+                <span style={{ color: '#818CF8', fontFamily: 'var(--font-mono)' }}>{progressPct}%</span>
+              </div>
+
+              <div style={{
+                width: '100%',
+                height: '12px',
+                backgroundColor: 'rgba(30, 41, 59, 0.8)',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                padding: '2px',
+                border: '1px solid rgba(255, 255, 255, 0.1)'
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(100, Math.max(0, progressPct))}%`,
+                  borderRadius: '8px',
+                  background: 'linear-gradient(90deg, #6366F1 0%, #8B5CF6 50%, #10B981 100%)',
+                  transition: 'width 0.4s ease-in-out',
+                  boxShadow: '0 0 16px rgba(99, 102, 241, 0.6)'
+                }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '16px' }}>
+              <span className="badge badge-indigo" style={{ fontSize: '0.75rem' }}>
+                <Sparkles size={11} /> {selectedFiles.length} Doc{selectedFiles.length > 1 ? 's' : ''}
+              </span>
+              <span className="badge badge-purple" style={{ fontSize: '0.75rem' }}>
+                Target: {bloomsLevel.toUpperCase()}
+              </span>
+              <span className="badge badge-emerald" style={{ fontSize: '0.75rem' }}>
+                {numQuestions} Qs
+              </span>
+            </div>
           </div>
         </div>
       )}

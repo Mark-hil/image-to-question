@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Now use absolute imports
 from services import qgen_service
 from services.vision_service import describe_image_stub
+from services.pdf_service import parse_page_range
 
 # =====================================================
 #  LOAD TESSERACT
@@ -525,36 +526,37 @@ class UltimateOCRService:
         
         return text
     
-    async def extract_text_from_pdf(self, pdf_path: str) -> Dict[str, str]:
+    async def extract_text_from_pdf(self, pdf_path: str, page_range: Optional[str] = None) -> Dict[str, str]:
         """
-        Extract text from PDF using ultimate processing.
+        Extract text from PDF using ultimate processing within optional page range.
+        First attempts direct text extraction; falls back to rendering page images & OCR.
         """
         try:
-            # Import PyMuPDF here to avoid circular imports
-            import fitz
+            import fitz  # PyMuPDF
             
-            # Open PDF
             doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+            start_idx, end_idx = parse_page_range(page_range or "", total_pages)
             
-            # Extract text directly from PDF (much faster than OCR for PDFs with text)
+            # Extract text directly from PDF within page range
             direct_text = ""
-            for page_num in range(len(doc)):
+            for page_num in range(start_idx, end_idx):
                 page = doc[page_num]
                 page_text = page.get_text()
-                if page_text.strip():
-                    direct_text += page_text + "\\n"
+                if page_text and page_text.strip():
+                    direct_text += page_text.strip() + "\n\n"
             
-            if direct_text.strip():
+            if direct_text and len(direct_text.strip()) > 30:
                 cleaned_text = self.ultimate_text_correction(direct_text.strip())
                 return {
                     "text": cleaned_text,
-                    "description": f"Extracted and ultimate-corrected text from {os.path.basename(pdf_path)}",
+                    "description": f"Extracted text from {os.path.basename(pdf_path)} (pages {start_idx+1}-{end_idx})",
                     "confidence": "high",
                     "full_text": cleaned_text
                 }
             
-            # If no direct text, extract images and OCR them
-            return await self._ocr_pdf_images(doc, pdf_path)
+            # If no or minimal direct text (e.g. scanned PDF), render pages to images and OCR
+            return await self._ocr_pdf_images(doc, pdf_path, start_idx, end_idx)
         
         except Exception as e:
             logger.error(f"Error extracting text from {pdf_path}: {str(e)}")
@@ -564,79 +566,84 @@ class UltimateOCRService:
                 "confidence": "error"
             }
     
-    async def _ocr_pdf_images(self, doc, pdf_path: str) -> Dict[str, str]:
-        """Extract images from PDF and OCR them in parallel."""
+    async def _ocr_pdf_images(self, doc, pdf_path: str, start_idx: int = 0, end_idx: int = 15) -> Dict[str, str]:
+        """Render PDF pages within page_range to images and run OCR in parallel."""
+        import fitz
         image_tasks = []
+        temp_paths = []
         
-        for page_num in range(min(len(doc), 10)):  # Limit to first 10 pages for speed
+        # Limit max pages per batch to 20 for OCR
+        sliced_end = min(end_idx, start_idx + 20)
+        for page_num in range(start_idx, sliced_end):
             page = doc[page_num]
-            images = page.get_images()
+            # Render full page as image at 150 DPI
+            pix = page.get_pixmap(dpi=150)
+            temp_path = f"/tmp/pdf_page_{os.path.basename(pdf_path)}_{page_num}.png"
+            pix.save(temp_path)
+            temp_paths.append(temp_path)
             
-            for img_index, img in enumerate(images):
-                xref = img[0]
-                pix = fitz.Pixmap(doc, xref)
-                
-                if pix.n - pix.alpha < 4:  # GRAY or RGB
-                    img_data = pix.tobytes("png")
-                    pil_image = Image.open(io.BytesIO(img_data))
-                    
-                    # Save temp image and OCR
-                    temp_path = f"/tmp/pdf_page_{page_num}_{img_index}.png"
-                    pil_image.save(temp_path)
-                    
-                    # Create OCR task
-                    task = self.extract_text_from_image(temp_path)
-                    image_tasks.append(task)
+            task = self.extract_text_from_image(temp_path)
+            image_tasks.append(task)
         
-        # Run all OCR tasks in parallel
         if image_tasks:
             results = await asyncio.gather(*image_tasks, return_exceptions=True)
             
-            # Combine results with text cleaning
             all_text = []
             for result in results:
                 if isinstance(result, dict) and result.get("text"):
-                    cleaned_text = result["text"]
-                    all_text.append(cleaned_text)
+                    cleaned = result["text"].strip()
+                    if cleaned:
+                        all_text.append(cleaned)
             
-            # Cleanup temp files
-            for page_num in range(min(len(doc), 10)):
-                for img_index in range(len(doc[page_num]).get_images() if hasattr(doc[page_num], 'get_images') else []):
-                    temp_path = f"/tmp/pdf_page_{page_num}_{img_index}.png"
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+            # Cleanup temp image files
+            for path in temp_paths:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
             
-            combined_text = "\\n".join(all_text)
+            combined_text = "\n\n".join(all_text)
             
             return {
                 "text": combined_text,
-                "description": f"OCR'd and ultimate-corrected images from {os.path.basename(pdf_path)}",
+                "description": f"OCR'd scanned pages from {os.path.basename(pdf_path)} (pages {start_idx+1}-{sliced_end})",
                 "confidence": "medium" if combined_text else "low",
                 "full_text": combined_text
             }
         else:
             return {
                 "text": "",
-                "description": f"No images found in {os.path.basename(pdf_path)}",
+                "description": f"No pages could be rendered from {os.path.basename(pdf_path)}",
                 "confidence": "low"
             }
 
 # Global ultimate OCR service instance
 _ultimate_ocr_service = UltimateOCRService()
 
-async def extract_text_from_path(file_path: str) -> Dict[str, str]:
+async def extract_text_from_path(file_path: str, page_range: Optional[str] = None) -> Dict[str, str]:
     """
-    Ultimate text extraction with comprehensive severe error correction.
+    Ultimate text extraction with comprehensive severe error correction and optional page range filtering.
     """
     file_ext = os.path.splitext(file_path)[1].lower()
     
     if file_ext == '.pdf':
-        return await _ultimate_ocr_service.extract_text_from_pdf(file_path)
+        return await _ultimate_ocr_service.extract_text_from_pdf(file_path, page_range=page_range)
+    elif file_ext in ['.pptx', '.ppt']:
+        from services.pptx_service import extract_pptx_slides
+        res = extract_pptx_slides(file_path, page_range=page_range)
+        cleaned_text = _ultimate_ocr_service.ultimate_text_correction(res.get("text", ""))
+        return {
+            "text": cleaned_text,
+            "description": f"Extracted text from {os.path.basename(file_path)} (slides {res.get('slide_range_used', '')})",
+            "confidence": "high" if cleaned_text else "low",
+            "full_text": cleaned_text
+        }
     else:
         return await _ultimate_ocr_service.extract_text_from_image(file_path)
 
-async def extract_text(file_path: str) -> Dict[str, str]:
+async def extract_text(file_path: str, page_range: Optional[str] = None) -> Dict[str, str]:
     """
     Alias for extract_text_from_path for compatibility.
     """
-    return await extract_text_from_path(file_path)
+    return await extract_text_from_path(file_path, page_range=page_range)

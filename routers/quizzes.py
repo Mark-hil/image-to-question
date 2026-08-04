@@ -24,10 +24,13 @@ class CreateQuestionInput(BaseModel):
     rationale: Optional[str] = None
     qtype: Optional[str] = "mcq"
     difficulty: Optional[str] = "medium"
+    blooms_level: Optional[str] = "Understand"
+    class_id: Optional[str] = None
 
 class CreateQuizRequest(BaseModel):
     title: str
     subject: Optional[str] = "General"
+    class_id: Optional[str] = None
     original_file_name: Optional[str] = None
     questions: List[CreateQuestionInput]
 
@@ -37,6 +40,15 @@ class UpdateQuestionInput(BaseModel):
     choices: Optional[List[str]] = None
     rationale: Optional[str] = None
     difficulty: Optional[str] = None
+    blooms_level: Optional[str] = None
+    class_id: Optional[str] = None
+
+class BulkDeleteRequest(BaseModel):
+    quiz_ids: List[str]
+
+class BulkExportRequest(BaseModel):
+    quiz_ids: List[str]
+    export_format: str = "csv"  # "csv", "docx", "qti", or "text"
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_quiz(
@@ -55,6 +67,7 @@ async def create_quiz(
         user_id=current_user.id,
         title=body.title,
         subject=body.subject or "General",
+        class_id=body.class_id,
         original_file_name=body.original_file_name
     )
     db.add(new_quiz)
@@ -73,7 +86,9 @@ async def create_quiz(
             choices=item.choices,
             rationale=item.rationale,
             qtype=item.qtype or "mcq",
-            difficulty=item.difficulty or "medium"
+            difficulty=item.difficulty or "medium",
+            blooms_level=item.blooms_level or "Understand",
+            class_id=item.class_id or body.class_id
         )
         db.add(q)
         quiz_questions.append(q)
@@ -150,10 +165,58 @@ async def update_question(
         q.rationale = body.rationale
     if body.difficulty is not None:
         q.difficulty = body.difficulty
+    if body.blooms_level is not None:
+        q.blooms_level = body.blooms_level
+    if body.class_id is not None:
+        q.class_id = body.class_id
 
     await db.commit()
     await db.refresh(q)
     return {"message": "Question updated successfully", "question": q.to_dict()}
+
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete_quizzes(
+    body: BulkDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Bulk delete multiple saved quiz banks."""
+    if not body.quiz_ids:
+        return {"message": "No quizzes specified"}
+
+    res = await db.execute(
+        select(Quiz).where(Quiz.id.in_(body.quiz_ids), Quiz.user_id == current_user.id)
+    )
+    quizzes = res.scalars().all()
+    count = len(quizzes)
+    for q in quizzes:
+        await db.delete(q)
+    await db.commit()
+    return {"message": f"Successfully deleted {count} quiz bank(s)"}
+
+@router.post("/bulk-export", status_code=status.HTTP_200_OK)
+async def bulk_export_quizzes(
+    body: BulkExportRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Bulk export multiple saved quiz banks as a zip archive."""
+    if not body.quiz_ids:
+        raise HTTPException(status_code=400, detail="No quiz IDs provided for bulk export.")
+
+    res = await db.execute(
+        select(Quiz)
+        .options(selectinload(Quiz.questions))
+        .where(Quiz.id.in_(body.quiz_ids), Quiz.user_id == current_user.id)
+    )
+    quizzes = res.scalars().all()
+    if not quizzes:
+        raise HTTPException(status_code=404, detail="No matching quizzes found for export.")
+
+    quizzes_data = [q.to_dict(include_questions=True) for q in quizzes]
+    zip_bytes = ExportService.generate_bulk_quizzes_zip(quizzes_data, export_format=body.export_format)
+    filename = f"QGen_Bulk_Export_{len(quizzes)}_quizzes.zip"
+    return make_download_response(zip_bytes, filename, "application/zip")
 
 @router.delete("/{quiz_id}", status_code=status.HTTP_200_OK)
 async def delete_quiz(
@@ -188,6 +251,27 @@ def make_download_response(content: Any, filename: str, media_type: str) -> Resp
             "Content-Disposition": f'attachment; filename="{safe_ascii}"; filename*=UTF-8\'\'{encoded}'
         }
     )
+
+@router.get("/{quiz_id}/export/csv", status_code=status.HTTP_200_OK)
+async def export_quiz_csv(
+    quiz_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Export quiz as structured CSV file."""
+    res = await db.execute(
+        select(Quiz)
+        .options(selectinload(Quiz.questions))
+        .where(Quiz.id == quiz_id, Quiz.user_id == current_user.id)
+    )
+    quiz = res.scalar_one_or_none()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+
+    questions_data = [q.to_dict() for q in quiz.questions]
+    csv_str = ExportService.generate_csv(quiz.title, questions_data)
+    filename = f"{quiz.title.replace(' ', '_')}.csv"
+    return make_download_response(csv_str.encode("utf-8"), filename, "text/csv")
 
 @router.get("/{quiz_id}/export/qti", status_code=status.HTTP_200_OK)
 async def export_quiz_qti(
@@ -258,12 +342,12 @@ async def export_quiz_docx(
 
 class DirectExportRequest(BaseModel):
     title: str
-    export_format: str = "qti"  # "qti", "text", or "docx"
+    export_format: str = "qti"  # "qti", "text", "docx", or "csv"
     questions: List[CreateQuestionInput]
 
 @router.post("/export/direct", status_code=status.HTTP_200_OK)
 async def export_direct(body: DirectExportRequest):
-    """Directly export unsaved generated questions to Canvas QTI zip, printable text, or Word docx."""
+    """Directly export unsaved generated questions to Canvas QTI zip, CSV, printable text, or Word docx."""
     if not body.questions:
         raise HTTPException(status_code=400, detail="No questions provided for export.")
 
@@ -276,6 +360,13 @@ async def export_direct(body: DirectExportRequest):
             docx_bytes,
             f"{safe_title}.docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    elif body.export_format == "csv":
+        csv_str = ExportService.generate_csv(body.title, questions_data)
+        return make_download_response(
+            csv_str.encode("utf-8"),
+            f"{safe_title}.csv",
+            "text/csv"
         )
     elif body.export_format == "qti":
         zip_bytes = ExportService.generate_canvas_qti_zip(body.title, questions_data)

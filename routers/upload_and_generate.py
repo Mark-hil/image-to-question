@@ -111,12 +111,16 @@ async def upload_and_generate(
     qtype_query: Optional[str] = Query(None, alias="qtype"),
     difficulty: Optional[str] = Form(None),
     difficulty_query: Optional[str] = Query(None, alias="difficulty"),
+    blooms_level: Optional[str] = Form(None),
+    blooms_level_query: Optional[str] = Query(None, alias="blooms_level"),
     teacher_id: Optional[str] = Form(None),
     num_questions: Optional[int] = Form(None),
     num_questions_query: Optional[int] = Query(None, alias="num_questions"),
     class_id: Optional[str] = Form(None),
     subject: Optional[str] = Form(None),
     subject_query: Optional[str] = Query(None, alias="subject"),
+    page_range: Optional[str] = Form(None),
+    page_range_query: Optional[str] = Query(None, alias="page_range"),
     background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db)
 ):
@@ -125,16 +129,20 @@ async def upload_and_generate(
     """
     qtype = qtype or qtype_query or "mcq"
     difficulty = difficulty or difficulty_query or "medium"
+    blooms_level = blooms_level or blooms_level_query or "all"
     num_questions = num_questions or num_questions_query or 3
     subject = subject or subject_query or "General"
+    page_range = page_range or page_range_query or ""
 
     metrics = ProcessingMetrics()
     request_data = {
         "qtype": qtype,
         "difficulty": difficulty,
+        "blooms_level": blooms_level,
         "num_questions": num_questions,
         "class_id": class_id,
         "subject": subject,
+        "page_range": page_range,
         "teacher_id": teacher_id,
         "files": files
     }
@@ -195,7 +203,7 @@ async def upload_and_generate(
                 # Create processing task based on file type
                 ext = get_file_extension(file_path).lower()
                 if ext == 'pdf':
-                    task = asyncio.create_task(process_pdf(file_path))
+                    task = asyncio.create_task(process_pdf(file_path, page_range=page_range))
                 else:
                     task = asyncio.create_task(process_image(file_path))
                 tasks.append(task)
@@ -266,7 +274,7 @@ async def upload_and_generate(
             if isinstance(result, dict):
                 # Check if OCR extraction was successful
                 text = result.get("text", "").strip()
-                if not text or text.startswith("Error:") or "404" in text or "error" in text.lower():
+                if not text or text.startswith("Error:") or text.startswith("[error]") or text.lower().startswith("error:"):
                     error_msg = f"OCR extraction failed or returned error for file {i+1}: {text}"
                     ocr_errors.append(error_msg)
                     logger.error(error_msg)
@@ -336,7 +344,8 @@ async def upload_and_generate(
                     difficulty=difficulty,
                     num_questions=questions_per_image,
                     class_id=class_id,
-                    subject=subject
+                    subject=subject,
+                    blooms_level=blooms_level
                 )
                 
                 # Parse JSON string if needed
@@ -423,6 +432,7 @@ async def upload_and_generate(
                         rationale=q.get("rationale", ""),
                         qtype=qtype,
                         difficulty=difficulty,
+                        blooms_level=q.get("blooms_level", "Understand"),
                         class_id=class_id,
                         subject=subject,
                         metadata_=json.dumps({
@@ -453,6 +463,7 @@ async def upload_and_generate(
                         "type": q.qtype,
                         "qtype": q.qtype,
                         "difficulty": q.difficulty,
+                        "blooms_level": q.blooms_level or "Understand",
                         "class_id": q.class_id,
                         "subject": q.subject,
                         "source_image": metadata.get("source_image", 0),

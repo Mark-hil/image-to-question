@@ -10,6 +10,8 @@ export interface QuestionData {
   rationale?: string;
   qtype?: string;
   difficulty?: string;
+  blooms_level?: string;
+  class_id?: string;
   subject?: string;
 }
 
@@ -17,6 +19,7 @@ export interface QuizData {
   id: string;
   title: string;
   subject: string;
+  class_id?: string;
   original_file_name?: string;
   question_count: number;
   created_at: string;
@@ -58,31 +61,44 @@ export const api = {
 
   // Question Generation
   async uploadAndGenerate(
-    file: File,
+    files: File | File[],
     qtype: string = "mcq",
     difficulty: string = "medium",
     numQuestions: number = 3,
     subject: string = "General",
-    apiKey?: string
+    apiKey?: string,
+    classId?: string,
+    bloomsLevel: string = "all",
+    pageRange: string = ""
   ) {
     const formData = new FormData();
-    formData.append("files", file);
+    const fileList = Array.isArray(files) ? files : [files];
+    fileList.forEach(file => {
+      formData.append("files", file);
+    });
     formData.append("qtype", qtype);
     formData.append("difficulty", difficulty);
+    formData.append("blooms_level", bloomsLevel);
     formData.append("num_questions", numQuestions.toString());
     formData.append("subject", subject);
+    if (pageRange) formData.append("page_range", pageRange);
+    if (classId) formData.append("class_id", classId);
 
     const headers: Record<string, string> = {};
     if (apiKey) {
       headers["X-API-Key"] = apiKey;
     }
 
-    const queryParams = new URLSearchParams({
+    const queryParamsObj: Record<string, string> = {
       qtype,
       difficulty,
+      blooms_level: bloomsLevel,
       num_questions: numQuestions.toString(),
       subject: subject || "General",
-    }).toString();
+    };
+    if (pageRange) queryParamsObj.page_range = pageRange;
+
+    const queryParams = new URLSearchParams(queryParamsObj).toString();
 
     const res = await fetch(`${API_BASE_URL}/generate/upload-and-generate?${queryParams}`, {
       method: "POST",
@@ -100,7 +116,8 @@ export const api = {
     title: string,
     subject: string,
     originalFileName: string | undefined,
-    questions: QuestionData[]
+    questions: QuestionData[],
+    classId?: string
   ) {
     const normalizedQuestions = questions.map((q) => ({
       question_text: q.question_text || q.question || '',
@@ -109,6 +126,8 @@ export const api = {
       rationale: q.rationale || '',
       qtype: q.qtype || 'mcq',
       difficulty: q.difficulty || 'medium',
+      blooms_level: q.blooms_level || 'Understand',
+      class_id: q.class_id || classId,
     }));
 
     const res = await fetch(`${API_BASE_URL}/quizzes`, {
@@ -120,6 +139,7 @@ export const api = {
       body: JSON.stringify({
         title,
         subject,
+        class_id: classId,
         original_file_name: originalFileName,
         questions: normalizedQuestions,
       }),
@@ -167,6 +187,53 @@ export const api = {
     return data;
   },
 
+  async bulkDeleteQuizzes(token: string, quizIds: string[]) {
+    const res = await fetch(`${API_BASE_URL}/quizzes/bulk-delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ quiz_ids: quizIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to bulk delete quizzes");
+    return data;
+  },
+
+  async bulkExportQuizzes(token: string, quizIds: string[], format: "csv" | "docx" | "qti" | "text" = "csv") {
+    const filename = `QGen_Bulk_Export_${quizIds.length}_quizzes.zip`;
+    const res = await fetch(`${API_BASE_URL}/quizzes/bulk-export`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ quiz_ids: quizIds, export_format: format }),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: "Bulk export failed" }));
+      throw new Error(errData.detail || "Failed to bulk export quizzes.");
+    }
+
+    const blobData = await res.blob();
+    const fileBlob = new Blob([blobData], { type: "application/zip" });
+    const url = window.URL.createObjectURL(fileBlob);
+    const a = document.createElement("a");
+    a.style.display = "none";
+    a.href = url;
+    a.setAttribute("download", filename);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+
+    setTimeout(() => {
+      if (document.body.contains(a)) document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }, 200);
+  },
+
   getQtiExportUrl(quizId: string) {
     return `${API_BASE_URL}/quizzes/${quizId}/export/qti`;
   },
@@ -179,7 +246,11 @@ export const api = {
     return `${API_BASE_URL}/quizzes/${quizId}/export/docx`;
   },
 
-  async exportDirect(title: string, questions: QuestionData[], format: "qti" | "text" | "docx" = "docx") {
+  getCsvExportUrl(quizId: string) {
+    return `${API_BASE_URL}/quizzes/${quizId}/export/csv`;
+  },
+
+  async exportDirect(title: string, questions: QuestionData[], format: "qti" | "text" | "docx" | "csv" = "docx") {
     const safeTitle = (title || "Quiz_Bank").replace(/[^a-zA-Z0-9_\-]/g, "_");
     let extension = ".docx";
     let mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -190,6 +261,9 @@ export const api = {
     } else if (format === "text") {
       extension = ".txt";
       mimeType = "text/plain";
+    } else if (format === "csv") {
+      extension = ".csv";
+      mimeType = "text/csv";
     }
 
     const filename = `${safeTitle}${extension}`;
@@ -226,7 +300,7 @@ export const api = {
     }, 200);
   },
 
-  async exportQuiz(token: string, quizId: string, format: "qti" | "text" | "docx" = "docx", title?: string) {
+  async exportQuiz(token: string, quizId: string, format: "qti" | "text" | "docx" | "csv" = "docx", title?: string) {
     const safeTitle = (title || "Quiz_Bank").replace(/[^a-zA-Z0-9_\-]/g, "_");
     let extension = ".docx";
     let mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -237,6 +311,9 @@ export const api = {
     } else if (format === "text") {
       extension = ".txt";
       mimeType = "text/plain";
+    } else if (format === "csv") {
+      extension = ".csv";
+      mimeType = "text/csv";
     }
 
     const filename = `${safeTitle}${extension}`;
@@ -279,6 +356,91 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Failed to initialize payment");
+    return data;
+  },
+
+  // Async Background Task Pipeline
+  async generateAsync(
+    files: File | File[],
+    qtype: string = "mcq",
+    difficulty: string = "medium",
+    numQuestions: number = 3,
+    subject: string = "General",
+    apiKey?: string,
+    bloomsLevel: string = "all",
+    pageRange: string = ""
+  ): Promise<{ task_id: string; status: string; progress: number; stage: string }> {
+    const formData = new FormData();
+    const fileList = Array.isArray(files) ? files : [files];
+    fileList.forEach(file => {
+      formData.append("files", file);
+    });
+    formData.append("qtype", qtype);
+    formData.append("difficulty", difficulty);
+    formData.append("blooms_level", bloomsLevel);
+    formData.append("num_questions", numQuestions.toString());
+    formData.append("subject", subject);
+    if (pageRange) formData.append("page_range", pageRange);
+
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+    }
+
+    const queryParamsObj: Record<string, string> = {
+      qtype,
+      difficulty,
+      blooms_level: bloomsLevel,
+      num_questions: numQuestions.toString(),
+      subject: subject || "General",
+    };
+    if (pageRange) queryParamsObj.page_range = pageRange;
+
+    const queryParams = new URLSearchParams(queryParamsObj).toString();
+
+    const res = await fetch(`${API_BASE_URL}/tasks/generate-async?${queryParams}`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to start async task.");
+    return data;
+  },
+
+  async getTaskStatus(taskId: string): Promise<{
+    task_id: string;
+    status: 'queued' | 'processing' | 'completed' | 'failed';
+    progress: number;
+    stage: string;
+    questions?: QuestionData[];
+    error?: string;
+  }> {
+    const res = await fetch(`${API_BASE_URL}/tasks/status/${taskId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to fetch task status.");
+    return data;
+  },
+
+  async inspectPdf(file: File): Promise<{
+    total_pages: number;
+    chapters: Array<{
+      title: string;
+      level: number;
+      start_page: number;
+      end_page: number;
+      range: string;
+    }>;
+  }> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${API_BASE_URL}/generate/inspect-pdf`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to inspect PDF.");
     return data;
   },
 };

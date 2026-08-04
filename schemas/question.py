@@ -7,6 +7,7 @@ class QuestionCreate(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
+    blooms_level: Optional[str] = "Understand"
     class_id: Optional[str] = None  # e.g., 'Grade 5', 'Class 10'
     subject: Optional[str] = None    # e.g., 'Math', 'Science', 'History'
     metadata: Optional[dict] = None
@@ -18,6 +19,7 @@ class QuestionOut(BaseModel):
     answer_text: str
     qtype: str
     difficulty: str
+    blooms_level: Optional[str] = "Understand"
     class_id: Optional[str] = None
     subject: Optional[str] = None
     metadata: Optional[dict] = None

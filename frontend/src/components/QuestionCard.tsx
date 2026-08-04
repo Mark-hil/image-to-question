@@ -67,6 +67,55 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
           <span className="badge badge-indigo">{(question.qtype || (question as any).type || 'MCQ').toUpperCase()}</span>
 
           <span className="badge badge-emerald">{(question.difficulty || 'Medium').toUpperCase()}</span>
+
+          {question.class_id && (
+            <span
+              className="badge"
+              style={{
+                background: 'rgba(236, 72, 153, 0.15)',
+                color: '#F472B6',
+                border: '1px solid rgba(236, 72, 153, 0.3)',
+                fontWeight: 700
+              }}
+              title={`Target Class/Grade: ${question.class_id}`}
+            >
+              🏫 {question.class_id}
+            </span>
+          )}
+
+          {/* Bloom's Taxonomy Badge */}
+          {(() => {
+            const level = question.blooms_level || 'Understand';
+            const bloomsMap: Record<string, { icon: string; color: string; bg: string; border: string }> = {
+              Remember: { icon: '🧠', color: '#C084FC', bg: 'rgba(168, 85, 247, 0.16)', border: 'rgba(168, 85, 247, 0.35)' },
+              Understand: { icon: '💡', color: '#38BDF8', bg: 'rgba(56, 189, 248, 0.16)', border: 'rgba(56, 189, 248, 0.35)' },
+              Apply: { icon: '⚡', color: '#34D399', bg: 'rgba(52, 211, 153, 0.16)', border: 'rgba(52, 211, 153, 0.35)' },
+              Analyze: { icon: '🔍', color: '#FBBF24', bg: 'rgba(251, 191, 36, 0.16)', border: 'rgba(251, 191, 36, 0.35)' },
+              Evaluate: { icon: '⚖️', color: '#FB923C', bg: 'rgba(251, 146, 60, 0.16)', border: 'rgba(251, 146, 60, 0.35)' },
+              Create: { icon: '🚀', color: '#F43F5E', bg: 'rgba(244, 63, 94, 0.16)', border: 'rgba(244, 63, 94, 0.35)' },
+            };
+            const config = bloomsMap[level] || bloomsMap['Understand'];
+            return (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  color: config.color,
+                  background: config.bg,
+                  border: `1px solid ${config.border}`,
+                  letterSpacing: '0.3px',
+                }}
+                title={`Bloom's Taxonomy Cognitive Classification: ${level}`}
+              >
+                <span>{config.icon}</span> {level.toUpperCase()}
+              </span>
+            );
+          })()}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

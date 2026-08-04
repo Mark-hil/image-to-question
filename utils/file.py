@@ -6,7 +6,8 @@ from utils.exceptions import AppError
 # Allowed file extensions
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
 ALLOWED_PDF_EXTENSIONS = {"pdf"}
-ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS.union(ALLOWED_PDF_EXTENSIONS)
+ALLOWED_PPTX_EXTENSIONS = {"pptx", "ppt"}
+ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS.union(ALLOWED_PDF_EXTENSIONS).union(ALLOWED_PPTX_EXTENSIONS)
 
 def get_file_extension(filename: str) -> str:
     """Extract and return the file extension in lowercase"""
@@ -23,6 +24,10 @@ def is_image(filename: str) -> bool:
 def is_pdf(filename: str) -> bool:
     """Check if the file is a PDF based on its extension"""
     return get_file_extension(filename) in ALLOWED_PDF_EXTENSIONS
+
+def is_pptx(filename: str) -> bool:
+    """Check if the file is a PowerPoint presentation based on its extension"""
+    return get_file_extension(filename) in ALLOWED_PPTX_EXTENSIONS
 
 async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_size: int = 3 * 1024 * 1024, max_pdf_size: int = 15 * 1024 * 1024) -> str:
     """

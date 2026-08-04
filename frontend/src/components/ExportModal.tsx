@@ -22,6 +22,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportingQti, setExportingQti] = useState(false);
   const [exportingText, setExportingText] = useState(false);
   const [exportingDocx, setExportingDocx] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   if (!isOpen) return null;
 
@@ -29,6 +30,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     navigator.clipboard.writeText(JSON.stringify(questions, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (quizId && token) {
+        await api.exportQuiz(token, quizId, 'csv', quizTitle);
+      } else {
+        await api.exportDirect(quizTitle, questions, 'csv');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Export failed');
+    } finally {
+      setExportingCsv(false);
+    }
   };
 
   const handleExportDocx = async () => {
@@ -79,7 +96,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-
   return (
     <div style={{
       position: 'fixed',
@@ -104,10 +120,39 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           Export Quiz Package
         </h3>
         <p style={{ fontSize: '0.88rem', color: '#94A3B8', marginBottom: '24px' }}>
-          Export <strong style={{ color: '#FFF' }}>{quizTitle}</strong> ({questions.length} Questions) to Word documents, LMS packages, or printable text.
+          Export <strong style={{ color: '#FFF' }}>{quizTitle}</strong> ({questions.length} Questions) to Word documents, CSV spreadsheets, LMS packages, or printable text.
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+          {/* CSV Spreadsheet */}
+          <div style={{
+            background: 'rgba(16, 185, 129, 0.1)',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+            padding: '16px',
+            borderRadius: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ padding: '10px', background: 'rgba(16, 185, 129, 0.2)', borderRadius: '10px', color: '#34D399' }}>
+                <FileType size={24} />
+              </div>
+              <div>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 600 }}>CSV Spreadsheet Data</h4>
+                <span style={{ fontSize: '0.78rem', color: '#94A3B8' }}>Structured CSV with Class, Subject & Bloom's tags (.csv)</span>
+              </div>
+            </div>
+            <button
+              onClick={handleExportCsv}
+              disabled={exportingCsv}
+              className="btn-primary"
+              style={{ background: 'linear-gradient(135deg, #059669 0%, #10B981 100%)', padding: '8px 14px', fontSize: '0.85rem' }}
+            >
+              <Download size={14} /> {exportingCsv ? 'Exporting...' : 'Export .csv'}
+            </button>
+          </div>
           
           {/* MS Word Document */}
           <div style={{

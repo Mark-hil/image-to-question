@@ -30,7 +30,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
-from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes
+from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes, tasks
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -243,6 +243,11 @@ app.include_router(
     prefix="/api/quizzes",
     tags=["Quiz Banks & Export"]
 )
+app.include_router(
+    tasks.router,
+    prefix="/api/tasks",
+    tags=["Async Task Pipeline"]
+)
 
 # Health check endpoint
 @app.get("/health")
@@ -253,9 +258,12 @@ async def health_check():
     # Check database connection with timeout
     try:
         from sqlalchemy import text
-        async with asyncio.wait_for(engine.connect(), timeout=5) as conn:
+        conn = await asyncio.wait_for(engine.connect(), timeout=5)
+        try:
             await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3)
             health_status["database"] = "connected"
+        finally:
+            await conn.close()
     except asyncio.TimeoutError:
         health_status["database"] = "timeout"
         health_status["status"] = "degraded"

@@ -19,6 +19,7 @@ class Question(Base):
     rationale = Column(Text, nullable=True, comment="Explanation or reasoning for the answer")
     qtype = Column(String(20), nullable=False, index=True, comment="Type of question: 'mcq', 'true_false', 'short_answer'")
     difficulty = Column(String(20), nullable=False, index=True, comment="Difficulty level: 'easy', 'medium', 'hard'")
+    blooms_level = Column(String(30), nullable=True, default='Understand', index=True, comment="Bloom's taxonomy level: 'Remember', 'Understand', 'Apply', 'Analyze', 'Evaluate', 'Create'")
     class_id = Column(String(100), nullable=True, index=True, comment="Target class/grade level")
     subject = Column(String(100), nullable=True, index=True, comment="Subject area of the question")
     metadata_ = Column('metadata', JSON_TYPE, nullable=True, comment="Additional metadata in JSON format")
@@ -37,6 +38,7 @@ class Question(Base):
         # Composite index for common filtering patterns
         Index('idx_question_teacher_type', 'teacher_id', 'qtype'),
         Index('idx_question_subject_difficulty', 'subject', 'difficulty'),
+        Index('idx_question_blooms_level', 'blooms_level'),
         # GIN index for JSONB columns to enable efficient querying
         Index('idx_metadata_gin', metadata_, postgresql_using='gin'),
         Index('idx_choices_gin', choices, postgresql_using='gin'),
@@ -53,6 +55,7 @@ class Question(Base):
             'rationale': self.rationale,
             'qtype': self.qtype,
             'difficulty': self.difficulty,
+            'blooms_level': self.blooms_level or 'Understand',
             'class_id': self.class_id,
             'subject': self.subject,
             'metadata': self.metadata_,  # Using the actual column name here

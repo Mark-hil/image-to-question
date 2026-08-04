@@ -200,3 +200,85 @@ class ExportService:
         doc.save(buffer)
         buffer.seek(0)
         return buffer.getvalue()
+
+    @staticmethod
+    def generate_csv(quiz_title: str, questions: List[Dict[str, Any]]) -> str:
+        """Generate structured CSV format for questions with choices, answers, Blooms taxonomy, and Class tag."""
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Header Row
+        writer.writerow([
+            "Question Number",
+            "Class/Grade",
+            "Subject",
+            "Question Type",
+            "Question Text",
+            "Option A",
+            "Option B",
+            "Option C",
+            "Option D",
+            "Correct Answer",
+            "Difficulty",
+            "Bloom's Taxonomy Level",
+            "Explanation/Rationale"
+        ])
+
+        for idx, q in enumerate(questions, 1):
+            q_text = q.get("question_text") or q.get("question") or f"Question {idx}"
+            a_text = q.get("answer_text") or q.get("answer") or ""
+            choices = q.get("choices") or []
+            q_type = q.get("qtype") or q.get("type") or "mcq"
+            if q_type == "true_false" and not choices:
+                choices = ["True", "False"]
+
+            opt_a = choices[0] if len(choices) > 0 else ""
+            opt_b = choices[1] if len(choices) > 1 else ""
+            opt_c = choices[2] if len(choices) > 2 else ""
+            opt_d = choices[3] if len(choices) > 3 else ""
+
+            writer.writerow([
+                idx,
+                q.get("class_id") or "Unassigned",
+                q.get("subject") or "General",
+                q_type.upper(),
+                q_text,
+                opt_a,
+                opt_b,
+                opt_c,
+                opt_d,
+                a_text,
+                q.get("difficulty") or "medium",
+                q.get("blooms_level") or "Understand",
+                q.get("rationale") or ""
+            ])
+
+        return output.getvalue()
+
+    @classmethod
+    def generate_bulk_quizzes_zip(cls, quizzes: List[Dict[str, Any]], export_format: str = "csv") -> bytes:
+        """Create a zip archive containing multiple exported quiz banks."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for quiz in quizzes:
+                title = quiz.get("title", "Untitled_Quiz")
+                safe_title = "".join(c if c.isalnum() or c in "._-" else "_" for c in title)
+                questions = quiz.get("questions", [])
+
+                if export_format == "docx":
+                    docx_bytes = cls.generate_docx(title, questions)
+                    zf.writestr(f"{safe_title}.docx", docx_bytes)
+                elif export_format == "qti":
+                    qti_zip_bytes = cls.generate_canvas_qti_zip(title, questions)
+                    zf.writestr(f"{safe_title}_qti.zip", qti_zip_bytes)
+                elif export_format == "text":
+                    text_str = cls.generate_printable_text(title, questions)
+                    zf.writestr(f"{safe_title}.txt", text_str.encode("utf-8"))
+                else:  # Default CSV
+                    csv_str = cls.generate_csv(title, questions)
+                    zf.writestr(f"{safe_title}.csv", csv_str.encode("utf-8"))
+
+        buffer.seek(0)
+        return buffer.getvalue()
+
