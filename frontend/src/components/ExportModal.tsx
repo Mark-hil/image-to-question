@@ -9,6 +9,8 @@ interface ExportModalProps {
   quizTitle: string;
   quizId?: string;
   questions: QuestionData[];
+  user?: any;
+  onOpenAuth?: () => void;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -17,6 +19,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   quizTitle,
   quizId,
   questions,
+  user,
+  onOpenAuth,
 }) => {
   const [copied, setCopied] = useState(false);
   const [exportingQti, setExportingQti] = useState(false);
@@ -26,8 +30,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   if (!isOpen) return null;
 
+  const exportQuestions = user ? questions : questions.slice(0, 5);
+
   const handleCopyJson = () => {
-    navigator.clipboard.writeText(JSON.stringify(questions, null, 2));
+    navigator.clipboard.writeText(JSON.stringify(exportQuestions, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -35,11 +41,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const handleExportCsv = async () => {
     setExportingCsv(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('qgen_jwt_token');
       if (quizId && token) {
         await api.exportQuiz(token, quizId, 'csv', quizTitle);
       } else {
-        await api.exportDirect(quizTitle, questions, 'csv');
+        await api.exportDirect(quizTitle, exportQuestions, 'csv');
       }
     } catch (err: any) {
       alert(err.message || 'Export failed');
@@ -51,11 +57,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const handleExportDocx = async () => {
     setExportingDocx(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('qgen_jwt_token');
       if (quizId && token) {
         await api.exportQuiz(token, quizId, 'docx', quizTitle);
       } else {
-        await api.exportDirect(quizTitle, questions, 'docx');
+        await api.exportDirect(quizTitle, exportQuestions, 'docx');
       }
     } catch (err: any) {
       alert(err.message || 'Export failed');
@@ -67,11 +73,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const handleExportQti = async () => {
     setExportingQti(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('qgen_jwt_token');
       if (quizId && token) {
         await api.exportQuiz(token, quizId, 'qti', quizTitle);
       } else {
-        await api.exportDirect(quizTitle, questions, 'qti');
+        await api.exportDirect(quizTitle, exportQuestions, 'qti');
       }
     } catch (err: any) {
       alert(err.message || 'Export failed');
@@ -83,11 +89,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const handleExportText = async () => {
     setExportingText(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('qgen_jwt_token');
       if (quizId && token) {
         await api.exportQuiz(token, quizId, 'text', quizTitle);
       } else {
-        await api.exportDirect(quizTitle, questions, 'text');
+        await api.exportDirect(quizTitle, exportQuestions, 'text');
       }
     } catch (err: any) {
       alert(err.message || 'Export failed');
@@ -119,9 +125,38 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <h3 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '6px' }}>
           Export Quiz Package
         </h3>
-        <p style={{ fontSize: '0.88rem', color: '#94A3B8', marginBottom: '24px' }}>
-          Export <strong style={{ color: '#FFF' }}>{quizTitle}</strong> ({questions.length} Questions) to Word documents, CSV spreadsheets, LMS packages, or printable text.
+        <p style={{ fontSize: '0.88rem', color: '#94A3B8', marginBottom: '20px' }}>
+          Export <strong style={{ color: '#FFF' }}>{quizTitle}</strong> ({exportQuestions.length} Questions) to Word documents, CSV spreadsheets, LMS packages, or printable text.
         </p>
+
+        {!user && questions.length > 5 && (
+          <div style={{
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.3)',
+            color: '#FBBF24',
+            padding: '12px 16px',
+            borderRadius: '10px',
+            marginBottom: '20px',
+            fontSize: '0.82rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px'
+          }}>
+            <span>🔒 <strong>Guest Limit</strong>: Exporting first 5 questions of {questions.length}.</span>
+            {onOpenAuth && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenAuth();
+                }}
+                style={{ background: 'none', border: 'none', color: '#FCD34D', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, textDecoration: 'underline', whiteSpace: 'nowrap' }}
+              >
+                Sign In to Export All
+              </button>
+            )}
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 

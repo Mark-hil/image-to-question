@@ -1,8 +1,8 @@
-import React from 'react';
 import { 
   Sparkles, 
   Library, 
   CreditCard, 
+  Code,
   User as UserIcon, 
   LogOut, 
   Plus, 
@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 
 interface SidebarProps {
-  activeTab: 'generator' | 'library' | 'pricing';
-  setActiveTab: (tab: 'generator' | 'library' | 'pricing') => void;
+  activeTab: 'generator' | 'library' | 'pricing' | 'developer';
+  setActiveTab: (tab: 'generator' | 'library' | 'pricing' | 'developer') => void;
   user: any;
   onOpenAuth: () => void;
   onLogout: () => void;
@@ -173,6 +173,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             { id: 'generator', label: 'AI Question Studio', icon: Sparkles, badge: 'VLM' },
             { id: 'library', label: 'My Quiz Library', icon: Library },
             { id: 'pricing', label: 'Pricing & Plans', icon: CreditCard, badge: 'PRO' },
+            { id: 'developer', label: 'Developer API', icon: Code, badge: 'API' },
           ].map((item) => {
             const IconComponent = item.icon;
             const isActive = activeTab === item.id;
@@ -208,9 +209,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     fontWeight: 800,
                     padding: '2px 7px',
                     borderRadius: '8px',
-                    background: item.badge === 'PRO' ? 'rgba(16, 185, 129, 0.18)' : 'rgba(99, 102, 241, 0.18)',
-                    color: item.badge === 'PRO' ? '#34D399' : '#818CF8',
-                    border: `1px solid ${item.badge === 'PRO' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(99, 102, 241, 0.3)'}`
+                    background: item.badge === 'PRO' ? 'rgba(16, 185, 129, 0.18)' : item.badge === 'API' ? 'rgba(56, 189, 248, 0.18)' : 'rgba(99, 102, 241, 0.18)',
+                    color: item.badge === 'PRO' ? '#34D399' : item.badge === 'API' ? '#38BDF8' : '#818CF8',
+                    border: `1px solid ${item.badge === 'PRO' ? 'rgba(16, 185, 129, 0.3)' : item.badge === 'API' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(99, 102, 241, 0.3)'}`
                   }}>
                     {item.badge}
                   </span>
@@ -220,6 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
       </div>
+
 
       {/* Bottom User Footer */}
       <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '16px', marginTop: '16px' }}>

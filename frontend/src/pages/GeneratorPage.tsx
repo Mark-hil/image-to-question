@@ -4,7 +4,7 @@ import { QuestionCard } from '../components/QuestionCard';
 import { ExportModal } from '../components/ExportModal';
 import { api } from '../services/api';
 import type { QuestionData } from '../services/api';
-import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Loader2, Zap, Brain, Target, Layers } from 'lucide-react';
+import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Loader2, Zap, Brain, Target, Layers, Lock } from 'lucide-react';
 
 interface GeneratorPageProps {
   user: any;
@@ -33,6 +33,26 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
   const [inspectingPdf, setInspectingPdf] = useState<boolean>(false);
   const [selectedChapterRange, setSelectedChapterRange] = useState<string | null>(null);
   const [useAsyncPipeline, setUseAsyncPipeline] = useState<boolean>(true);
+  const [guestUsesCount, setGuestUsesCount] = useState<number>(() => {
+    const stored = localStorage.getItem('qgen_guest_uses');
+    return stored ? parseInt(stored, 10) || 0 : 0;
+  });
+
+  const maxAllowedQuestions = user ? 50 : 5;
+
+  React.useEffect(() => {
+    if (!user && numQuestions > 5) {
+      setNumQuestions(5);
+    }
+  }, [user]);
+
+  const incrementGuestUses = () => {
+    if (!user) {
+      const next = guestUsesCount + 1;
+      setGuestUsesCount(next);
+      localStorage.setItem('qgen_guest_uses', next.toString());
+    }
+  };
 
   const handleFilesChange = async (files: File[]) => {
     setSelectedFiles(files);
@@ -96,6 +116,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
               setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
             }
           }
+          incrementGuestUses();
           setTimeout(() => {
             setProgressModalOpen(false);
             setLoading(false);
@@ -116,10 +137,18 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
   };
 
   const handleGenerate = async () => {
+    if (!user && guestUsesCount >= 3) {
+      setError('You have reached your 3 free guest generation chances! Please sign in or create a free account to continue.');
+      onOpenAuth();
+      return;
+    }
+
     if (selectedFiles.length === 0) {
       setError('Please select at least one document or image file.');
       return;
     }
+
+    const effectiveNumQuestions = user ? numQuestions : Math.min(5, numQuestions);
 
     setLoading(true);
     setError(null);
@@ -135,7 +164,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           selectedFiles,
           qtype,
           difficulty,
-          numQuestions,
+          effectiveNumQuestions,
           subject,
           undefined,
           bloomsLevel,
@@ -167,7 +196,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           selectedFiles,
           qtype,
           difficulty,
-          numQuestions,
+          effectiveNumQuestions,
           subject,
           undefined,
           classId,
@@ -187,6 +216,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         if (selectedFiles.length > 0) {
           setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
         }
+        incrementGuestUses();
 
         setTimeout(() => {
           setProgressModalOpen(false);
@@ -252,6 +282,13 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           <span className="badge badge-indigo"><Sparkles size={12} /> Groq Vision Qwen3.6 VLM</span>
           <span className="badge badge-purple"><Layers size={12} /> Multi-Document Batch Processing</span>
           <span className="badge badge-emerald"><Target size={12} /> Granular Bloom's Taxonomy</span>
+          {!user ? (
+            <span className="badge" style={{ background: guestUsesCount >= 3 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)', color: guestUsesCount >= 3 ? '#F87171' : '#FBBF24', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
+              <Target size={12} /> Guest Trial: {guestUsesCount}/3 Used ({Math.max(0, 3 - guestUsesCount)} left)
+            </span>
+          ) : (
+            <span className="badge badge-emerald"><Zap size={12} /> Unlimited Generations</span>
+          )}
         </div>
         <h2 style={{ fontSize: '2.3rem', fontWeight: 800, marginBottom: '10px' }} className="text-gradient">
           Worksheet & Textbook <span className="text-gradient-indigo">AI Question Studio</span>
@@ -529,32 +566,54 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
 
           {/* Question Count Selector */}
           <div style={{ marginBottom: '24px' }}>
-            <label className="form-label" style={{ display: 'block', marginBottom: '8px' }}>
-              Number of Questions to Generate
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <label className="form-label" style={{ margin: 0 }}>
+                Number of Questions to Generate
+              </label>
+              {!user && (
+                <span style={{ fontSize: '0.75rem', color: '#FBBF24', fontWeight: 600 }}>
+                  Guest Max: 5 Qs
+                </span>
+              )}
+            </div>
             
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
-              {[5, 10, 15, 20, 25, 30].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setNumQuestions(preset)}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: '20px',
-                    fontSize: '0.82rem',
-                    fontWeight: 700,
-                    border: '1px solid',
-                    borderColor: numQuestions === preset ? '#6366F1' : 'rgba(255, 255, 255, 0.12)',
-                    background: numQuestions === preset ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
-                    color: numQuestions === preset ? '#818CF8' : '#94A3B8',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  {preset} Qs
-                </button>
-              ))}
+              {[5, 10, 15, 20, 25, 30].map((preset) => {
+                const isLocked = !user && preset > 5;
+                const isSelected = numQuestions === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      if (isLocked) {
+                        onOpenAuth();
+                      } else {
+                        setNumQuestions(preset);
+                      }
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '20px',
+                      fontSize: '0.82rem',
+                      fontWeight: 700,
+                      border: '1px solid',
+                      borderColor: isSelected ? '#6366F1' : 'rgba(255, 255, 255, 0.12)',
+                      background: isSelected ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                      color: isSelected ? '#818CF8' : isLocked ? '#64748B' : '#94A3B8',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      opacity: isLocked ? 0.6 : 1
+                    }}
+                    title={isLocked ? 'Sign in to generate more than 5 questions' : undefined}
+                  >
+                    {preset} Qs {isLocked && <Lock size={10} color="#F87171" />}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Stepper counter */}
@@ -570,21 +629,26 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
               <input
                 type="number"
                 min="1"
-                max="50"
+                max={maxAllowedQuestions}
                 className="input-field"
                 style={{ width: '80px', textAlign: 'center', fontWeight: 800, fontSize: '1.1rem' }}
                 value={numQuestions}
-                onChange={(e) => setNumQuestions(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 1;
+                  setNumQuestions(Math.min(maxAllowedQuestions, Math.max(1, val)));
+                }}
               />
               <button
                 type="button"
                 className="btn-secondary"
                 style={{ padding: '8px 14px', borderRadius: '10px' }}
-                onClick={() => setNumQuestions(Math.min(50, numQuestions + 1))}
+                onClick={() => setNumQuestions(Math.min(maxAllowedQuestions, numQuestions + 1))}
               >
                 <Plus size={16} />
               </button>
-              <span style={{ fontSize: '0.82rem', color: '#94A3B8' }}>Questions (Max 50)</span>
+              <span style={{ fontSize: '0.82rem', color: '#94A3B8' }}>
+                Questions (Max {user ? 50 : '5 for Guests'})
+              </span>
             </div>
           </div>
 
@@ -606,7 +670,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                   Async Background Task Pipeline
                 </div>
                 <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>
-                  Prevents timeouts for large PDFs & 50+ question batches
+                  Prevents timeouts for large PDFs & question batches
                 </div>
               </div>
             </div>
@@ -639,15 +703,53 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             </label>
           </div>
 
+          {/* Guest 3-Chance Trial Banner */}
+          {!user && guestUsesCount >= 3 && (
+            <div style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              padding: '14px 18px',
+              borderRadius: '14px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#F87171' }}>
+                <Lock size={18} />
+                <div>
+                  <strong style={{ fontSize: '0.9rem' }}>3 Free Guest Trial Generations Used</strong>
+                  <div style={{ fontSize: '0.78rem', color: '#CBD5E1' }}>Sign in or create a free account to continue generating.</div>
+                </div>
+              </div>
+              <button onClick={onOpenAuth} className="btn-primary" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>
+                Sign In / Sign Up
+              </button>
+            </div>
+          )}
+
           <button
-            onClick={handleGenerate}
+            onClick={!user && guestUsesCount >= 3 ? onOpenAuth : handleGenerate}
             disabled={loading || selectedFiles.length === 0}
             className="btn-primary"
-            style={{ width: '100%', justifyContent: 'center', padding: '15px', borderRadius: '14px', fontSize: '1rem' }}
+            style={{
+              width: '100%',
+              justifyContent: 'center',
+              padding: '15px',
+              borderRadius: '14px',
+              fontSize: '1rem',
+              background: !user && guestUsesCount >= 3 ? 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)' : undefined
+            }}
           >
             {loading ? (
               <>
                 <Loader2 size={18} className="spinner" /> Generating Questions...
+              </>
+            ) : !user && guestUsesCount >= 3 ? (
+              <>
+                <Lock size={20} /> 3 Guest Chances Used — Sign In / Sign Up
               </>
             ) : (
               <>
@@ -856,6 +958,8 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         quizTitle={quizTitle}
         quizId={savedQuizId}
         questions={questions}
+        user={user}
+        onOpenAuth={onOpenAuth}
       />
     </div>
   );

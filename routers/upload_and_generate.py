@@ -3,22 +3,23 @@ import shutil
 import json
 import time
 import logging
+import asyncio
+import traceback
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query
-from utils.exceptions import AppError
-from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
+
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query, Header
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-import asyncio
 from pydantic import BaseModel
-import traceback
 
 from database import get_db
 from models import Question
 from services.qgen_service import generate_questions_from_content
 from .generate import process_image, process_pdf
 from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension
+from utils.exceptions import AppError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -121,6 +122,8 @@ async def upload_and_generate(
     subject_query: Optional[str] = Query(None, alias="subject"),
     page_range: Optional[str] = Form(None),
     page_range_query: Optional[str] = Query(None, alias="page_range"),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
     background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db)
 ):
@@ -133,6 +136,10 @@ async def upload_and_generate(
     num_questions = num_questions or num_questions_query or 3
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
+
+    # Enforce guest max 5 questions limit if unauthenticated
+    if not authorization and not x_api_key and not teacher_id:
+        num_questions = min(num_questions, 5)
 
     metrics = ProcessingMetrics()
     request_data = {

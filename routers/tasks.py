@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query, Header
 from pydantic import BaseModel
 
 from database import async_session_maker
@@ -211,6 +211,8 @@ async def generate_questions_async(
     subject_query: Optional[str] = Query(None, alias="subject"),
     page_range: Optional[str] = Form(None),
     page_range_query: Optional[str] = Query(None, alias="page_range"),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
 ):
     """
     Initialize an asynchronous background task to extract text and generate questions.
@@ -222,6 +224,10 @@ async def generate_questions_async(
     num_questions = num_questions or num_questions_query or 3
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
+
+    # Enforce guest max 5 questions limit if unauthenticated
+    if not authorization and not x_api_key and not teacher_id:
+        num_questions = min(num_questions, 5)
 
     if not files:
         raise AppError(status_code=400, error_code="NO_FILES", message="No files uploaded.")

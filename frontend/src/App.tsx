@@ -5,10 +5,11 @@ import { AuthModal } from './components/AuthModal';
 import { GeneratorPage } from './pages/GeneratorPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { PricingPage } from './pages/PricingPage';
+import { DeveloperPage } from './pages/DeveloperPage';
 import { api } from './services/api';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'generator' | 'library' | 'pricing'>('generator');
+  const [activeTab, setActiveTab] = useState<'generator' | 'library' | 'pricing' | 'developer'>('generator');
   const [token, setToken] = useState<string | null>(localStorage.getItem('qgen_jwt_token'));
   const [user, setUser] = useState<any>(null);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -84,7 +85,15 @@ export function App() {
               onOpenAuth={() => setIsAuthOpen(true)}
             />
           )}
+
+          {activeTab === 'developer' && (
+            <DeveloperPage
+              user={user}
+              onOpenAuth={() => setIsAuthOpen(true)}
+            />
+          )}
         </main>
+
 
         {/* Footer */}
         <footer style={{

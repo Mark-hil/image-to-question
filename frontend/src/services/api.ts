@@ -443,4 +443,52 @@ export const api = {
     if (!res.ok) throw new Error(data.message || data.detail || "Failed to inspect PDF.");
     return data;
   },
+
+  // Tenant & B2B Developer API Key Management
+  async registerTenant(name: string, email: string, tier: string = "free") {
+    const res = await fetch(`${API_BASE_URL}/tenants/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, tier }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Tenant registration failed.");
+    return data;
+  },
+
+  async createApiKey(tenantId: string, name: string = "Default Key", rateLimitRpm: number = 60) {
+    const res = await fetch(`${API_BASE_URL}/tenants/${tenantId}/api-keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, rate_limit_rpm: rateLimitRpm }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to create API key.");
+    return data.api_key;
+  },
+
+  async listApiKeys(tenantId: string) {
+    const res = await fetch(`${API_BASE_URL}/tenants/${tenantId}/api-keys`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to list API keys.");
+    return data.api_keys;
+  },
+
+  async revokeApiKey(tenantId: string, keyId: string) {
+    const res = await fetch(`${API_BASE_URL}/tenants/${tenantId}/api-keys/${keyId}`, {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to revoke API key.");
+    return data;
+  },
+
+  async getTenantUsage(tenantId: string) {
+    const res = await fetch(`${API_BASE_URL}/tenants/${tenantId}/usage`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "Failed to fetch tenant usage.");
+    return data;
+  },
 };
+
+
