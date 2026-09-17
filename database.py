@@ -134,6 +134,12 @@ async def init_db() -> None:
                 except Exception:
                     pass  # Column already exists
 
+                try:
+                    await conn.execute(text("ALTER TABLE users ADD COLUMN monthly_questions_generated INTEGER DEFAULT 0"))
+                    logger.info("Added missing monthly_questions_generated column to users table")
+                except Exception:
+                    pass  # Column already exists
+
                 logger.info("✅ Database tables created/migrated successfully")
                 return
                 

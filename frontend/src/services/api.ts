@@ -69,7 +69,8 @@ export const api = {
     apiKey?: string,
     classId?: string,
     bloomsLevel: string = "all",
-    pageRange: string = ""
+    pageRange: string = "",
+    mode: string = "exam"
   ) {
     const formData = new FormData();
     const fileList = Array.isArray(files) ? files : [files];
@@ -81,12 +82,17 @@ export const api = {
     formData.append("blooms_level", bloomsLevel);
     formData.append("num_questions", numQuestions.toString());
     formData.append("subject", subject);
+    formData.append("mode", mode);
     if (pageRange) formData.append("page_range", pageRange);
     if (classId) formData.append("class_id", classId);
 
     const headers: Record<string, string> = {};
     if (apiKey) {
       headers["X-API-Key"] = apiKey;
+    }
+    const token = localStorage.getItem("qgen_jwt_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
 
     const queryParamsObj: Record<string, string> = {
@@ -95,6 +101,7 @@ export const api = {
       blooms_level: bloomsLevel,
       num_questions: numQuestions.toString(),
       subject: subject || "General",
+      mode: mode || "exam",
     };
     if (pageRange) queryParamsObj.page_range = pageRange;
 
@@ -107,7 +114,10 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || data.detail || "Question generation failed");
-    return data.questions as QuestionData[];
+    const questions = (data.questions || []) as (QuestionData[] & { usage?: any; limit_hit_warning?: string });
+    (questions as any).usage = data.usage;
+    (questions as any).limit_hit_warning = data.limit_hit_warning;
+    return questions;
   },
 
   // Quizzes
@@ -348,11 +358,11 @@ export const api = {
 
 
   // Paystack Billing
-  async initializePayment(email: string, amount: number, tenantId?: string) {
+  async initializePayment(email: string, amount: number, tenantId?: string, userId?: string, planTier?: string) {
     const res = await fetch(`${API_BASE_URL}/billing/initialize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, amount, tenant_id: tenantId }),
+      body: JSON.stringify({ email, amount, tenant_id: tenantId, user_id: userId, plan_tier: planTier }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Failed to initialize payment");
@@ -368,7 +378,8 @@ export const api = {
     subject: string = "General",
     apiKey?: string,
     bloomsLevel: string = "all",
-    pageRange: string = ""
+    pageRange: string = "",
+    mode: string = "exam"
   ): Promise<{ task_id: string; status: string; progress: number; stage: string }> {
     const formData = new FormData();
     const fileList = Array.isArray(files) ? files : [files];
@@ -380,11 +391,16 @@ export const api = {
     formData.append("blooms_level", bloomsLevel);
     formData.append("num_questions", numQuestions.toString());
     formData.append("subject", subject);
+    formData.append("mode", mode);
     if (pageRange) formData.append("page_range", pageRange);
 
     const headers: Record<string, string> = {};
     if (apiKey) {
       headers["X-API-Key"] = apiKey;
+    }
+    const token = localStorage.getItem("qgen_jwt_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
 
     const queryParamsObj: Record<string, string> = {
@@ -393,6 +409,7 @@ export const api = {
       blooms_level: bloomsLevel,
       num_questions: numQuestions.toString(),
       subject: subject || "General",
+      mode: mode || "exam",
     };
     if (pageRange) queryParamsObj.page_range = pageRange;
 
@@ -414,6 +431,8 @@ export const api = {
     progress: number;
     stage: string;
     questions?: QuestionData[];
+    usage?: any;
+    limit_hit_warning?: string;
     error?: string;
   }> {
     const res = await fetch(`${API_BASE_URL}/tasks/status/${taskId}`);

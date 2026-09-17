@@ -8,9 +8,9 @@ import {
   Plus, 
   PanelLeftClose, 
   PanelLeft, 
-  Zap, 
-  CheckCircle2 
+  Zap 
 } from 'lucide-react';
+
 
 interface SidebarProps {
   activeTab: 'generator' | 'library' | 'pricing' | 'developer';
@@ -254,14 +254,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 {!isCollapsed && (
                   <div style={{ overflow: 'hidden', textAlign: 'left' }}>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {user.full_name || user.email.split('@')[0]}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100px' }}>
+                        {user.full_name || user.email.split('@')[0]}
+                      </span>
+                      <span style={{
+                        fontSize: '0.62rem',
+                        fontWeight: 800,
+                        padding: '1px 6px',
+                        borderRadius: '6px',
+                        background: user.tier === 'pro' ? 'rgba(16, 185, 129, 0.2)' : user.tier === 'team' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(148, 163, 184, 0.15)',
+                        color: user.tier === 'pro' ? '#34D399' : user.tier === 'team' ? '#818CF8' : '#94A3B8',
+                        border: `1px solid ${user.tier === 'pro' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`
+                      }}>
+                        {(user.tier || 'free').toUpperCase()}
+                      </span>
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: '#10B981', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <CheckCircle2 size={10} /> Active Account
+                    <div style={{ fontSize: '0.7rem', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }} title={user.next_renewal_date ? `Quota renews on ${user.next_renewal_date}` : undefined}>
+                      <Zap size={10} color={user.is_quota_exhausted || user.generations_remaining === 0 ? '#FB7185' : '#10B981'} />
+                      <span>{user.monthly_generations_used ?? 0}/{user.monthly_limit ?? 6} used{user.days_until_reset !== undefined ? ` • ${user.days_until_reset}d` : ''}</span>
                     </div>
                   </div>
                 )}
+
               </div>
 
               {!isCollapsed && (

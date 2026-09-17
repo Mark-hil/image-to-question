@@ -1,14 +1,19 @@
-# 🎯 Question Generation Project
+# 🎯 QGen AI: Multimodal Assessment & Question Bank Platform
 
-A comprehensive OCR and question generation system that extracts text from images/PDFs, enhances it professionally, and generates educational questions.
+A full-stack, enterprise-grade AI assessment generation platform that extracts text and complex diagrams from photos, textbook PDFs, and PowerPoint slide decks, enhances content, and generates pedagogy-aligned question banks (MCQs, True/False, Short Answer).
 
-## 🚀 **Features**
+## 🚀 **Key Features**
 
-- **🔧 Ultimate OCR Service** - Advanced text extraction with error correction
-- **📚 Professional Book Editor** - Text enhancement without meaning changes
-- **🤖 Question Generation** - Educational content creation using AI
-- **📊 Complete Pipeline** - From image to questions seamlessly
-- **🎯 Conservative Editing** - Preserves original meaning while improving quality
+- **🤖 Multimodal Vision & OCR Engine**: Advanced OCR with error correction combined with Groq Vision LLMs to extract handwritten, printed, and complex diagrammatic educational material.
+- **🎓 Dual Pedagogical Generation Modes**:
+  - **Exam Assessment Mode (`exam`)**: Summative test rigor with plausible distractors targeting student misconceptions and scenario-based questions to prevent rote guessing.
+  - **Study & Practice Mode (`practice`)**: Formative self-study with active recall, foundational definitions, and rich encouraging rationales.
+- **🧠 Bloom's Taxonomy Classification**: Tags and filters questions across cognitive levels (*Remember*, *Understand*, *Apply*, *Analyze*, *Evaluate*, *Create*).
+- **🔒 "Extract & Discard" Privacy Architecture**: Zero-retention transient file processing. Documents are processed in-memory/temp files and immediately unlinked from disk upon OCR extraction for full FERPA/GDPR compliance.
+- **📊 Quiz Bank Library & LMS Exports**: Save, organize, and export quizzes directly into Microsoft Word (`.docx`) and Canvas / Moodle QTI (`.zip`) format.
+- **⚡ Async Background Processing Queue**: Fast async job execution (`/api/tasks/generate-async`) for large PDFs (up to 200+ pages) with live stage progression polling.
+- **🔑 B2B Developer API Portal**: Self-service API Key generation (`qg_live_...`), prefix storage, key revocation, and interactive code snippets on the `/developer` dashboard.
+- **💳 Automated Paystack Billing**: Tiered educator plans (Free, Pro, Team, Institution) and B2B API credit packs with HMAC-verified webhook upgrades.
 
 ## 📋 **Prerequisites**
 
@@ -146,18 +151,42 @@ docker build -t question-gen .
 docker run -p 8000:8000 question-gen
 ```
 
-## 📖 **API Usage & Authentication**
+## 📖 **API Usage & Monetization**
 
 For complete API specifications, see **[API Documentation](API_DOCUMENTATION.md)** or open **`http://localhost:8000/docs`** for interactive Swagger documentation.
 
-### **1. Register Free API Key ($0.00 / 1,000 generations/mo)**
+### 🔄 **Monetization & Quota Enforcement Flow**
+
+```mermaid
+graph TD
+    Req[Incoming Generation Request] --> AuthCheck{Auth Method?}
+    AuthCheck -- JWT Bearer Token --> CheckUser{Check User Tier & Quota}
+    AuthCheck -- X-API-Key Header --> CheckTenant{Check API Credit Balance}
+    AuthCheck -- Unauthenticated --> CheckGuest{Guest Limit: 3 uses}
+
+    CheckUser -- Used >= Limit --> BlockUser["❌ 402 PLAN_LIMIT_REACHED<br/>(Upgrade to Pro via Paystack)"]
+    CheckTenant -- Quota <= 0 --> BlockTenant["❌ 402 QUOTA_EXHAUSTED<br/>(Top up API credits)"]
+    CheckGuest -- Exceeded --> BlockGuest["❌ Prompt Sign In / Register"]
+
+    CheckUser -- Quota OK --> RunGen[Generate Questions with Vision LLM]
+    CheckTenant -- Quota OK --> RunGen
+    CheckGuest -- Quota OK --> RunGen
+
+    RunGen --> Deduct["✅ Deduct Quota<br/>(User: +1 used / Tenant: -1 credit)"]
+    Deduct --> ReturnResult[Return Structured Questions JSON]
+
+    Pay["💳 Paystack Checkout<br/>(/api/billing/initialize)"] --> Hook["Webhook Handler<br/>(charge.success)"]
+    Hook --> Upgrade["Auto-Upgrade Account<br/>(User: Pro 300/mo / Tenant: +10k credits)"]
+```
+
+### **1. Register Free API Key ($0.00 / 1,000 sandbox generations)**
 ```bash
 curl -X POST "http://localhost:8000/api/tenants/register" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Learning App",
     "email": "dev@mylearningapp.com",
-    "tier": "free"
+    "tier": "starter"
   }'
 ```
 
@@ -171,10 +200,23 @@ curl -X POST "http://localhost:8000/api/generate/upload-and-generate" \
   -F "num_questions=5"
 ```
 
-### **3. Check Usage & Free Quota**
+### **3. Check Usage & Quota Balance**
 ```bash
 curl -X GET "http://localhost:8000/api/tenants/{tenant_id}/usage"
 ```
+
+### **4. Upgrade Plan or Top Up via Paystack**
+```bash
+curl -X POST "http://localhost:8000/api/billing/initialize" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "teacher@school.edu",
+    "amount": 15.0,
+    "user_id": "your_user_id",
+    "plan_tier": "pro"
+  }'
+```
+
 
 ## 🧪 **Testing**
 

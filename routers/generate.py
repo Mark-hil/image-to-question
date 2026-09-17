@@ -25,8 +25,9 @@ import schemas
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-from utils.file import ALLOWED_EXTENSIONS, get_file_extension, save_upload_file
+from utils.file import ALLOWED_EXTENSIONS, get_file_extension, save_upload_file, cleanup_file, cleanup_files
 from fastapi import File
+
 
 @router.post("/inspect-pdf")
 async def inspect_pdf(file: UploadFile = File(...)):
@@ -41,13 +42,16 @@ async def inspect_pdf(file: UploadFile = File(...)):
         raise AppError(status_code=400, error_code="INVALID_FILE_TYPE", message="File must be a PDF or PowerPoint document.")
     
     saved_path = await save_upload_file(file, "uploads")
-    
-    if ext in ['pptx', 'ppt']:
-        from services.pptx_service import inspect_pptx_slides
-        return inspect_pptx_slides(saved_path)
-    
-    res = pdf_service.extract_pdf_toc(saved_path)
-    return res
+    try:
+        if ext in ['pptx', 'ppt']:
+            from services.pptx_service import inspect_pptx_slides
+            return inspect_pptx_slides(saved_path)
+        
+        res = pdf_service.extract_pdf_toc(saved_path)
+        return res
+    finally:
+        # Extract & Discard: clean up inspected document immediately
+        cleanup_file(saved_path)
 
 class GenerateRequest(BaseModel):
     file_paths: List[str] = Field(..., description="List of file paths to process")
@@ -227,4 +231,7 @@ async def generate_from_files(
             error_code="QUESTION_GENERATION_FAILED",
             message=f"Error generating questions: {str(e)}"
         )
+    finally:
+        # Extract & Discard: Clean up source files once processed
+        cleanup_files(req.file_paths)
 

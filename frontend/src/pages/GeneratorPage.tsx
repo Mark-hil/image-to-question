@@ -4,25 +4,83 @@ import { QuestionCard } from '../components/QuestionCard';
 import { ExportModal } from '../components/ExportModal';
 import { api } from '../services/api';
 import type { QuestionData } from '../services/api';
-import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Loader2, Zap, Brain, Target, Layers, Lock } from 'lucide-react';
+import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Check, Loader2, Zap, Brain, Target, Layers, Lock, GraduationCap } from 'lucide-react';
 
 interface GeneratorPageProps {
   user: any;
   token: string | null;
   onOpenAuth: () => void;
   onNavigateToLibrary: () => void;
+  onNavigateToPricing?: () => void;
+  onRefreshUser?: () => void;
 }
 
 export const GeneratorPage: React.FC<GeneratorPageProps> = ({
   user,
   token,
   onOpenAuth,
-  onNavigateToLibrary
+  onNavigateToLibrary,
+  onNavigateToPricing,
+  onRefreshUser
 }) => {
+
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [qtype, setQtype] = useState<string>('mcq');
-  const [difficulty, setDifficulty] = useState<string>('medium');
-  const [bloomsLevel, setBloomsLevel] = useState<string>('all');
+  const [selectedQtypes, setSelectedQtypes] = useState<string[]>(['mcq']);
+  const [selectedDifficulties, setSelectedDifficulties] = useState<string[]>(['medium']);
+  const [selectedBlooms, setSelectedBlooms] = useState<string[]>(['all']);
+
+  // Multi-selection handlers
+  const toggleQtype = (id: string) => {
+    if (selectedQtypes.includes(id)) {
+      if (selectedQtypes.length > 1) {
+        setSelectedQtypes(selectedQtypes.filter(t => t !== id));
+      }
+    } else {
+      setSelectedQtypes([...selectedQtypes, id]);
+    }
+  };
+
+  const selectAllQtypes = () => {
+    if (selectedQtypes.length === 3) {
+      setSelectedQtypes(['mcq']);
+    } else {
+      setSelectedQtypes(['mcq', 'true_false', 'short_answer']);
+    }
+  };
+
+  const toggleDifficulty = (id: string) => {
+    if (selectedDifficulties.includes(id)) {
+      if (selectedDifficulties.length > 1) {
+        setSelectedDifficulties(selectedDifficulties.filter(d => d !== id));
+      }
+    } else {
+      setSelectedDifficulties([...selectedDifficulties, id]);
+    }
+  };
+
+  const toggleBlooms = (id: string) => {
+    if (id === 'all') {
+      setSelectedBlooms(['all']);
+      return;
+    }
+    const filtered = selectedBlooms.filter(b => b.toLowerCase() !== 'all');
+    if (filtered.includes(id)) {
+      const next = filtered.filter(b => b !== id);
+      setSelectedBlooms(next.length === 0 ? ['all'] : next);
+    } else {
+      const next = [...filtered, id];
+      if (next.length === 6) {
+        setSelectedBlooms(['all']);
+      } else {
+        setSelectedBlooms(next);
+      }
+    }
+  };
+
+  const qtypeParam = selectedQtypes.join(',');
+  const diffParam = selectedDifficulties.join(',');
+  const bloomsParam = selectedBlooms.includes('all') ? 'all' : selectedBlooms.join(',');
+  const [mode, setMode] = useState<'exam' | 'practice'>('exam');
   const [numQuestions, setNumQuestions] = useState<number>(10);
   const [subject, setSubject] = useState<string>('Biology');
   const [classId, setClassId] = useState<string>('Grade 10');
@@ -38,13 +96,28 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
     return stored ? parseInt(stored, 10) || 0 : 0;
   });
 
-  const maxAllowedQuestions = user ? 50 : 5;
+  const maxAllowedQuestions = user ? (user.max_questions_per_quiz || 20) : 5;
+  const totalLimit = user?.monthly_limit || 6;
+  const usedCount = user?.monthly_generations_used || 0;
+  const remainingCount = user?.generations_remaining !== undefined ? user.generations_remaining : Math.max(0, totalLimit - usedCount);
+
+  const totalQuestionsLimit = user?.monthly_questions_limit || (user?.tier === 'pro' ? 1000 : 120);
+  const questionsUsedCount = user?.monthly_questions_generated || 0;
+  const questionsRemaining = user?.total_questions_remaining !== undefined ? user.total_questions_remaining : Math.max(0, totalQuestionsLimit - questionsUsedCount);
+  const isQuestionLimitDepleted = !!user && questionsRemaining <= 0;
+  const isQuotaDepleted = !!user && (remainingCount <= 0 || isQuestionLimitDepleted);
+  const isNearLimit = !!user && !isQuotaDepleted && (remainingCount <= 2 || questionsRemaining <= 20);
+  const usagePct = Math.min(100, Math.round((usedCount / totalLimit) * 100));
+
+  const [limitHitNotice, setLimitHitNotice] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (!user && numQuestions > 5) {
       setNumQuestions(5);
+    } else if (user && numQuestions > maxAllowedQuestions) {
+      setNumQuestions(maxAllowedQuestions);
     }
-  }, [user]);
+  }, [user, maxAllowedQuestions]);
 
   const incrementGuestUses = () => {
     if (!user) {
@@ -116,7 +189,11 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
               setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
             }
           }
+          if (res.limit_hit_warning) {
+            setLimitHitNotice(res.limit_hit_warning);
+          }
           incrementGuestUses();
+          onRefreshUser?.();
           setTimeout(() => {
             setProgressModalOpen(false);
             setLoading(false);
@@ -162,13 +239,14 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
       try {
         const result = await api.generateAsync(
           selectedFiles,
-          qtype,
-          difficulty,
+          qtypeParam,
+          diffParam,
           effectiveNumQuestions,
           subject,
           undefined,
-          bloomsLevel,
-          pageRange
+          bloomsParam,
+          pageRange,
+          mode
         );
         pollTaskStatus(result.task_id);
       } catch (err: any) {
@@ -184,7 +262,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         
         const progTimer1 = setTimeout(() => {
           setProgressPct(60);
-          setProgressStage(`Generating questions with Bloom's Taxonomy: ${bloomsLevel.toUpperCase()}...`);
+          setProgressStage(`Generating questions with Bloom's Taxonomy: ${bloomsParam.toUpperCase()}...`);
         }, 1500);
 
         const progTimer2 = setTimeout(() => {
@@ -194,14 +272,15 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
 
         const generated = await api.uploadAndGenerate(
           selectedFiles,
-          qtype,
-          difficulty,
+          qtypeParam,
+          diffParam,
           effectiveNumQuestions,
           subject,
           undefined,
           classId,
-          bloomsLevel,
-          pageRange
+          bloomsParam,
+          pageRange,
+          mode
         );
 
         clearTimeout(progTimer1);
@@ -216,7 +295,11 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         if (selectedFiles.length > 0) {
           setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
         }
+        if ((generated as any).limit_hit_warning) {
+          setLimitHitNotice((generated as any).limit_hit_warning);
+        }
         incrementGuestUses();
+        onRefreshUser?.();
 
         setTimeout(() => {
           setProgressModalOpen(false);
@@ -286,8 +369,10 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             <span className="badge" style={{ background: guestUsesCount >= 3 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)', color: guestUsesCount >= 3 ? '#F87171' : '#FBBF24', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
               <Target size={12} /> Guest Trial: {guestUsesCount}/3 Used ({Math.max(0, 3 - guestUsesCount)} left)
             </span>
+          ) : user.tier === 'pro' ? (
+            <span className="badge badge-emerald"><Zap size={12} /> Pro Tier: 100 Quizzes / Month</span>
           ) : (
-            <span className="badge badge-emerald"><Zap size={12} /> Unlimited Generations</span>
+            <span className="badge badge-indigo"><Zap size={12} /> Free Tier: {remainingCount} of {totalLimit} Quizzes Left</span>
           )}
         </div>
         <h2 style={{ fontSize: '2.3rem', fontWeight: 800, marginBottom: '10px' }} className="text-gradient">
@@ -297,6 +382,50 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           Upload multiple textbook pages or PDF documents simultaneously. Tailor targeted cognitive levels with Bloom's Taxonomy for MS Word (.docx) or Canvas LMS package exports.
         </p>
       </div>
+
+      {/* Limit Hit & Quota Exhaustion Alert */}
+      {limitHitNotice && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(99, 102, 241, 0.14) 100%)',
+          border: '1px solid rgba(245, 158, 11, 0.4)',
+          borderRadius: '14px',
+          padding: '14px 20px',
+          marginBottom: '24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '14px',
+          boxShadow: '0 4px 15px rgba(245, 158, 11, 0.1)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Zap size={20} color="#FBBF24" />
+            <div>
+              <div style={{ fontWeight: 800, color: '#FCD34D', fontSize: '0.9rem' }}>Generation Limit Notice</div>
+              <div style={{ color: '#E2E8F0', fontSize: '0.84rem', marginTop: '2px' }}>{limitHitNotice}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {onNavigateToPricing && (
+              <button
+                type="button"
+                onClick={onNavigateToPricing}
+                className="btn-primary"
+                style={{ padding: '6px 14px', fontSize: '0.8rem', borderRadius: '8px', whiteSpace: 'nowrap' }}
+              >
+                Upgrade Plan
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setLimitHitNotice(null)}
+              style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', fontSize: '1.2rem', padding: '2px 6px' }}
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Upload & Controls Grid */}
       <div className="responsive-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '28px', marginBottom: '36px' }}>
@@ -315,89 +444,231 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             <Sliders size={20} color="#818CF8" /> 2. Question Options
           </h3>
 
-          {/* Question Type Visual Options */}
+          {/* Generation Mode Selector: Exam Assessment vs Study & Practice */}
+          <div style={{ marginBottom: '20px' }}>
+            <label className="form-label" style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <GraduationCap size={15} color={mode === 'exam' ? '#818CF8' : '#34D399'} /> Generation Mode
+              </span>
+              <span style={{ fontSize: '0.74rem', color: mode === 'exam' ? '#A5B4FC' : '#6EE7B7', fontWeight: 600 }}>
+                {mode === 'exam' ? 'Educator Summative Assessment' : 'Learner Formative Practice'}
+              </span>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setMode('exam')}
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  border: `1.5px solid ${mode === 'exam' ? '#6366F1' : 'rgba(255, 255, 255, 0.08)'}`,
+                  background: mode === 'exam' ? 'rgba(99, 102, 241, 0.18)' : 'rgba(255, 255, 255, 0.02)',
+                  color: mode === 'exam' ? '#FFF' : '#94A3B8',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                  boxShadow: mode === 'exam' ? '0 0 14px rgba(99, 102, 241, 0.25)' : 'none'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: mode === 'exam' ? '#A5B4FC' : '#CBD5E1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <GraduationCap size={16} color={mode === 'exam' ? '#818CF8' : '#94A3B8'} /> Exam Assessment
+                  </span>
+                  {mode === 'exam' && <Check size={14} strokeWidth={3} color="#818CF8" />}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: mode === 'exam' ? '#E2E8F0' : '#64748B', lineHeight: '1.3' }}>
+                  Rigorous tests with realistic distractors & scenario problems for tutors
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMode('practice')}
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  border: `1.5px solid ${mode === 'practice' ? '#10B981' : 'rgba(255, 255, 255, 0.08)'}`,
+                  background: mode === 'practice' ? 'rgba(16, 185, 129, 0.16)' : 'rgba(255, 255, 255, 0.02)',
+                  color: mode === 'practice' ? '#FFF' : '#94A3B8',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                  boxShadow: mode === 'practice' ? '0 0 14px rgba(16, 185, 129, 0.25)' : 'none'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: mode === 'practice' ? '#6EE7B7' : '#CBD5E1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <BookOpen size={16} color={mode === 'practice' ? '#10B981' : '#94A3B8'} /> Study & Practice
+                  </span>
+                  {mode === 'practice' && <Check size={14} strokeWidth={3} color="#10B981" />}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: mode === 'practice' ? '#E2E8F0' : '#64748B', lineHeight: '1.3' }}>
+                  Formative self-study with conceptual hints & revision rationales for learners
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* Question Type Visual Options with Multi-Selection */}
           <div style={{ marginBottom: '18px' }}>
-            <label className="form-label" style={{ marginBottom: '8px' }}>Question Format</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <label className="form-label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>Question Format</span>
+                {selectedQtypes.length > 1 && (
+                  <span className="badge badge-indigo" style={{ fontSize: '0.68rem', padding: '1px 7px' }}>
+                    {selectedQtypes.length} formats selected
+                  </span>
+                )}
+              </label>
+              <button
+                type="button"
+                onClick={selectAllQtypes}
+                style={{
+                  background: selectedQtypes.length === 3 ? 'rgba(99, 102, 241, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                  border: `1px solid ${selectedQtypes.length === 3 ? '#6366F1' : 'rgba(255, 255, 255, 0.12)'}`,
+                  color: selectedQtypes.length === 3 ? '#A5B4FC' : '#94A3B8',
+                  borderRadius: '8px',
+                  padding: '3px 8px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Toggle all question formats for a mixed quiz"
+              >
+                <Sparkles size={11} /> {selectedQtypes.length === 3 ? 'Reset to MCQ' : 'Select All / Mix'}
+              </button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
               {[
                 { id: 'mcq', label: 'MCQ', desc: 'Multiple Choice' },
                 { id: 'true_false', label: 'True/False', desc: 'Binary' },
                 { id: 'short_answer', label: 'Short Answer', desc: 'Open Text' }
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setQtype(item.id)}
-                  style={{
-                    padding: '10px 8px',
-                    borderRadius: '12px',
-                    border: `1px solid ${qtype === item.id ? '#6366F1' : 'rgba(255, 255, 255, 0.08)'}`,
-                    background: qtype === item.id ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.03)',
-                    color: qtype === item.id ? '#FFF' : '#94A3B8',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    textAlign: 'center',
-                    boxShadow: qtype === item.id ? '0 0 12px rgba(99, 102, 241, 0.2)' : 'none'
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{item.label}</div>
-                  <div style={{ fontSize: '0.72rem', color: qtype === item.id ? '#A5B4FC' : '#64748B' }}>{item.desc}</div>
-                </button>
-              ))}
+              ].map((item) => {
+                const isSelected = selectedQtypes.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => toggleQtype(item.id)}
+                    style={{
+                      padding: '10px 8px',
+                      borderRadius: '12px',
+                      border: `1px solid ${isSelected ? '#6366F1' : 'rgba(255, 255, 255, 0.08)'}`,
+                      background: isSelected ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.03)',
+                      color: isSelected ? '#FFF' : '#94A3B8',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      textAlign: 'center',
+                      boxShadow: isSelected ? '0 0 12px rgba(99, 102, 241, 0.25)' : 'none',
+                      position: 'relative'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', fontWeight: 700, fontSize: '0.88rem' }}>
+                      {item.label}
+                      {isSelected && <Check size={13} strokeWidth={3} color="#818CF8" />}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: isSelected ? '#A5B4FC' : '#64748B' }}>{item.desc}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Difficulty Visual Options */}
+          {/* Difficulty Visual Options with Multi-Selection */}
           <div style={{ marginBottom: '18px' }}>
-            <label className="form-label" style={{ marginBottom: '8px' }}>Difficulty Level</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <label className="form-label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>Difficulty Level</span>
+                {selectedDifficulties.length > 1 && (
+                  <span className="badge badge-amber" style={{ fontSize: '0.68rem', padding: '1px 7px' }}>
+                    {selectedDifficulties.length} combined
+                  </span>
+                )}
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedDifficulties.length === 3) {
+                    setSelectedDifficulties(['medium']);
+                  } else {
+                    setSelectedDifficulties(['easy', 'medium', 'hard']);
+                  }
+                }}
+                style={{
+                  background: selectedDifficulties.length === 3 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                  border: `1px solid ${selectedDifficulties.length === 3 ? '#F59E0B' : 'rgba(255, 255, 255, 0.12)'}`,
+                  color: selectedDifficulties.length === 3 ? '#FCD34D' : '#94A3B8',
+                  borderRadius: '8px',
+                  padding: '3px 8px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Combine multiple difficulty levels for progressive assessments"
+              >
+                {selectedDifficulties.length === 3 ? 'Reset to Medium' : 'Progressive (All 3)'}
+              </button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
               {[
                 { id: 'easy', label: 'Easy', color: '#10B981' },
                 { id: 'medium', label: 'Medium', color: '#F59E0B' },
                 { id: 'hard', label: 'Hard', color: '#F43F5E' }
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setDifficulty(item.id)}
-                  style={{
-                    padding: '10px 8px',
-                    borderRadius: '12px',
-                    border: `1px solid ${difficulty === item.id ? item.color : 'rgba(255, 255, 255, 0.08)'}`,
-                    background: difficulty === item.id ? `${item.color}22` : 'rgba(255, 255, 255, 0.03)',
-                    color: difficulty === item.id ? '#FFF' : '#94A3B8',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    textAlign: 'center'
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: '0.88rem', color: difficulty === item.id ? item.color : '#94A3B8' }}>
-                    {item.label}
-                  </div>
-                </button>
-              ))}
+              ].map((item) => {
+                const isSelected = selectedDifficulties.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => toggleDifficulty(item.id)}
+                    style={{
+                      padding: '10px 8px',
+                      borderRadius: '12px',
+                      border: `1px solid ${isSelected ? item.color : 'rgba(255, 255, 255, 0.08)'}`,
+                      background: isSelected ? `${item.color}22` : 'rgba(255, 255, 255, 0.03)',
+                      color: isSelected ? '#FFF' : '#94A3B8',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      textAlign: 'center',
+                      boxShadow: isSelected ? `0 0 10px ${item.color}33` : 'none'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', fontWeight: 700, fontSize: '0.88rem', color: isSelected ? item.color : '#94A3B8' }}>
+                      {item.label}
+                      {isSelected && <Check size={13} strokeWidth={3} color={item.color} />}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Bloom's Taxonomy Filter Component */}
+          {/* Bloom's Taxonomy Filter Component with Multi-Selection */}
           <div style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
               <label className="form-label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Target size={14} color="#818CF8" /> Bloom's Taxonomy Cognitive Level
               </label>
               <span style={{ fontSize: '0.75rem', color: '#818CF8', fontWeight: 600 }}>
-                Default: All Levels
+                {selectedBlooms.includes('all') ? 'Default: All Levels' : `${selectedBlooms.length} Level${selectedBlooms.length > 1 ? 's' : ''} Selected`}
               </span>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(105px, 1fr))', gap: '8px' }}>
               {bloomsLevelsList.map((item) => {
-                const isSelected = bloomsLevel === item.id;
+                const isSelected = item.id === 'all'
+                  ? selectedBlooms.includes('all')
+                  : selectedBlooms.includes(item.id);
                 return (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setBloomsLevel(item.id)}
+                    onClick={() => toggleBlooms(item.id)}
                     style={{
                       padding: '8px 6px',
                       borderRadius: '10px',
@@ -406,12 +677,14 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                       color: isSelected ? '#FFF' : '#94A3B8',
                       cursor: 'pointer',
                       transition: 'all 0.2s ease',
-                      textAlign: 'center'
+                      textAlign: 'center',
+                      boxShadow: isSelected ? `0 0 8px ${item.color}33` : 'none'
                     }}
                     title={item.desc}
                   >
-                    <div style={{ fontWeight: 700, fontSize: '0.8rem', color: isSelected ? item.color : '#CBD5E1' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', fontWeight: 700, fontSize: '0.8rem', color: isSelected ? item.color : '#CBD5E1' }}>
                       {item.label}
+                      {isSelected && <Check size={11} strokeWidth={3} color={item.color} />}
                     </div>
                     <div style={{ fontSize: '0.68rem', color: isSelected ? '#E2E8F0' : '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {item.desc}
@@ -570,25 +843,35 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
               <label className="form-label" style={{ margin: 0 }}>
                 Number of Questions to Generate
               </label>
-              {!user && (
+              {!user ? (
                 <span style={{ fontSize: '0.75rem', color: '#FBBF24', fontWeight: 600 }}>
-                  Guest Max: 5 Qs
+                  Guest Max: 5 Qs (Sign up free for up to 20 Qs)
+                </span>
+              ) : (
+                <span style={{ fontSize: '0.75rem', color: '#38BDF8', fontWeight: 600 }}>
+                  {user.tier === 'pro' || user.tier === 'team' || user.tier === 'institution'
+                    ? 'Pro Plan: up to 50 Qs'
+                    : 'Free Plan: up to 20 Qs per quiz'}
                 </span>
               )}
             </div>
             
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
-              {[5, 10, 15, 20, 25, 30].map((preset) => {
-                const isLocked = !user && preset > 5;
+              {[5, 10, 15, 20, 30, 50].map((preset) => {
+                const isGuestLocked = !user && preset > 5;
+                const isProLocked = !!user && preset > maxAllowedQuestions;
+                const isLocked = isGuestLocked || isProLocked;
                 const isSelected = numQuestions === preset;
                 return (
                   <button
                     key={preset}
                     type="button"
                     onClick={() => {
-                      if (isLocked) {
+                      if (isGuestLocked) {
                         onOpenAuth();
-                      } else {
+                      } else if (isProLocked && onNavigateToPricing) {
+                        onNavigateToPricing();
+                      } else if (!isLocked) {
                         setNumQuestions(preset);
                       }
                     }}
@@ -608,7 +891,13 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                       gap: '4px',
                       opacity: isLocked ? 0.6 : 1
                     }}
-                    title={isLocked ? 'Sign in to generate more than 5 questions' : undefined}
+                    title={
+                      isGuestLocked
+                        ? 'Sign in free to generate up to 30 questions'
+                        : isProLocked
+                        ? 'Upgrade to Pro for 50+ question banks'
+                        : undefined
+                    }
                   >
                     {preset} Qs {isLocked && <Lock size={10} color="#F87171" />}
                   </button>
@@ -647,7 +936,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 <Plus size={16} />
               </button>
               <span style={{ fontSize: '0.82rem', color: '#94A3B8' }}>
-                Questions (Max {user ? 50 : '5 for Guests'})
+                Questions (Max {maxAllowedQuestions} for {user ? (user.tier === 'pro' ? 'Pro' : 'Free') : 'Guests'})
               </span>
             </div>
           </div>
@@ -703,35 +992,138 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             </label>
           </div>
 
-          {/* Guest 3-Chance Trial Banner */}
-          {!user && guestUsesCount >= 3 && (
+          {/* Soft Limits & Visual Progress Card */}
+          {user ? (
             <div style={{
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
+              background: isQuotaDepleted
+                ? 'rgba(239, 68, 68, 0.12)'
+                : isNearLimit
+                ? 'rgba(245, 158, 11, 0.12)'
+                : 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid',
+              borderColor: isQuotaDepleted
+                ? 'rgba(239, 68, 68, 0.35)'
+                : isNearLimit
+                ? 'rgba(245, 158, 11, 0.35)'
+                : 'rgba(255, 255, 255, 0.08)',
               padding: '14px 18px',
               borderRadius: '14px',
-              marginBottom: '16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '12px'
+              marginBottom: '16px'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#F87171' }}>
-                <Lock size={18} />
-                <div>
-                  <strong style={{ fontSize: '0.9rem' }}>3 Free Guest Trial Generations Used</strong>
-                  <div style={{ fontSize: '0.78rem', color: '#CBD5E1' }}>Sign in or create a free account to continue generating.</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.82rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: isQuotaDepleted ? '#F87171' : isNearLimit ? '#FBBF24' : '#38BDF8' }}>
+                  <Zap size={14} />
+                  <span>
+                    {isQuotaDepleted
+                      ? 'Monthly Generation Quota Depleted'
+                      : isNearLimit
+                      ? `Low Quota Warning: ${remainingCount} Quizzes (${questionsRemaining} Qs) Left`
+                      : `${usedCount}/${totalLimit} Quizzes Used • ${questionsUsedCount}/${totalQuestionsLimit} Total Qs`}
+                  </span>
                 </div>
+                <span style={{ color: '#94A3B8', fontSize: '0.75rem' }}>
+                  {user.next_renewal_date ? `Renews ${user.next_renewal_date}` : '30-day cycle'}
+                </span>
               </div>
-              <button onClick={onOpenAuth} className="btn-primary" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>
-                Sign In / Sign Up
-              </button>
+
+              {/* Visual Progress Bar */}
+              <div style={{
+                height: '6px',
+                background: 'rgba(255, 255, 255, 0.1)',
+                borderRadius: '3px',
+                overflow: 'hidden',
+                marginBottom: '8px'
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${usagePct}%`,
+                  background: isQuotaDepleted
+                    ? '#EF4444'
+                    : isNearLimit
+                    ? '#F59E0B'
+                    : 'linear-gradient(90deg, #6366F1, #38BDF8)',
+                  borderRadius: '3px',
+                  transition: 'width 0.4s ease'
+                }} />
+              </div>
+
+              {/* Explanatory Subtitle & Upgrade Action */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
+                <span style={{ color: '#94A3B8' }}>
+                  {isQuotaDepleted
+                    ? `Auto-renews back to full quota in ${user.days_until_reset ?? 0} days.`
+                    : `${remainingCount} quizzes left (${questionsRemaining} Qs allowance) • Max ${maxAllowedQuestions} Qs per quiz`}
+                </span>
+                {(isNearLimit || isQuotaDepleted) && onNavigateToPricing && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToPricing}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: isQuotaDepleted ? '#F87171' : '#FBBF24',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: 0
+                    }}
+                  >
+                    Upgrade to Pro <Zap size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Guest Progress Card */
+            <div style={{
+              background: guestUsesCount >= 3 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.08)',
+              border: '1px solid',
+              borderColor: guestUsesCount >= 3 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.25)',
+              padding: '14px 18px',
+              borderRadius: '14px',
+              marginBottom: '16px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.82rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: guestUsesCount >= 3 ? '#F87171' : '#FBBF24' }}>
+                  <Sparkles size={14} />
+                  <span>Guest Preview ({guestUsesCount}/3 Free Trials Used)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenAuth}
+                  style={{ background: 'none', border: 'none', color: '#38BDF8', fontWeight: 700, fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
+                >
+                  Sign Up Free →
+                </button>
+              </div>
+
+              <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '6px' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(100, (guestUsesCount / 3) * 100)}%`,
+                  background: guestUsesCount >= 3 ? '#EF4444' : '#F59E0B',
+                  borderRadius: '3px'
+                }} />
+              </div>
+
+              <div style={{ fontSize: '0.74rem', color: '#94A3B8' }}>
+                {guestUsesCount >= 3
+                  ? 'All 3 guest trials used. Create a free account to unlock 30 quizzes/month and 30 questions per test.'
+                  : 'Create a free account to unlock 30 quizzes/month and up to 30 questions per test.'}
+              </div>
             </div>
           )}
 
           <button
-            onClick={!user && guestUsesCount >= 3 ? onOpenAuth : handleGenerate}
+            onClick={
+              !user && guestUsesCount >= 3
+                ? onOpenAuth
+                : isQuotaDepleted && onNavigateToPricing
+                ? onNavigateToPricing
+                : handleGenerate
+            }
             disabled={loading || selectedFiles.length === 0}
             className="btn-primary"
             style={{
@@ -740,7 +1132,9 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
               padding: '15px',
               borderRadius: '14px',
               fontSize: '1rem',
-              background: !user && guestUsesCount >= 3 ? 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)' : undefined
+              background: (!user && guestUsesCount >= 3) || isQuotaDepleted
+                ? 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)'
+                : undefined
             }}
           >
             {loading ? (
@@ -750,6 +1144,10 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             ) : !user && guestUsesCount >= 3 ? (
               <>
                 <Lock size={20} /> 3 Guest Chances Used — Sign In / Sign Up
+              </>
+            ) : isQuotaDepleted ? (
+              <>
+                <Zap size={20} /> Monthly Limit Reached — Upgrade to Pro
               </>
             ) : (
               <>
@@ -771,12 +1169,38 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           marginBottom: '28px',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
           gap: '12px'
         }}>
-          <AlertCircle size={20} style={{ flexShrink: 0 }} />
-          <span>{error}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <AlertCircle size={20} style={{ flexShrink: 0 }} />
+            <span>{error}</span>
+          </div>
+          {(error.toLowerCase().includes('limit') || error.toLowerCase().includes('upgrade') || error.toLowerCase().includes('quota')) && onNavigateToPricing && (
+            <button
+              onClick={onNavigateToPricing}
+              style={{
+                background: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)',
+                color: '#FFF',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '10px',
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 2px 10px rgba(99, 102, 241, 0.4)'
+              }}
+            >
+              <Zap size={14} /> Upgrade Plan
+            </button>
+          )}
         </div>
       )}
+
 
       {/* Generated Questions Section */}
       {questions.length > 0 && (
@@ -793,9 +1217,12 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.85) 0%, rgba(30, 41, 59, 0.85) 100%)'
           }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
                 <span className="badge badge-emerald"><CheckCircle size={12} /> Generation Complete</span>
                 <span className="badge badge-indigo">{questions.length} Questions</span>
+                <span className="badge" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38BDF8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                  ⏱️ Saved ~{Math.round(questions.length * 3)}m of prep time
+                </span>
               </div>
               <h3 style={{ fontSize: '1.4rem', fontWeight: 800 }}>{quizTitle}</h3>
             </div>
@@ -941,7 +1368,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 <Sparkles size={11} /> {selectedFiles.length} Doc{selectedFiles.length > 1 ? 's' : ''}
               </span>
               <span className="badge badge-purple" style={{ fontSize: '0.75rem' }}>
-                Target: {bloomsLevel.toUpperCase()}
+                Target: {bloomsParam.toUpperCase()}
               </span>
               <span className="badge badge-emerald" style={{ fontSize: '0.75rem' }}>
                 {numQuestions} Qs

@@ -1,7 +1,12 @@
 import os
+import uuid
+import logging
+from typing import List, Optional
 from pathlib import Path
 from fastapi import UploadFile, status
 from utils.exceptions import AppError
+
+logger = logging.getLogger(__name__)
 
 # Allowed file extensions
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
@@ -28,6 +33,31 @@ def is_pdf(filename: str) -> bool:
 def is_pptx(filename: str) -> bool:
     """Check if the file is a PowerPoint presentation based on its extension"""
     return get_file_extension(filename) in ALLOWED_PPTX_EXTENSIONS
+
+def cleanup_file(file_path: Optional[str]) -> bool:
+    """
+    Safely remove a file from disk if it exists.
+    Returns True if removed, False otherwise.
+    """
+    if not file_path:
+        return False
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Cleaned up temporary file: {file_path}")
+            return True
+    except Exception as e:
+        logger.warning(f"Error cleaning up temporary file {file_path}: {e}")
+    return False
+
+def cleanup_files(file_paths: Optional[List[str]]) -> None:
+    """
+    Safely remove multiple files from disk.
+    """
+    if not file_paths:
+        return
+    for path in file_paths:
+        cleanup_file(path)
 
 async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_size: int = 3 * 1024 * 1024, max_pdf_size: int = 15 * 1024 * 1024) -> str:
     """
@@ -81,9 +111,13 @@ async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_s
     await upload_file.seek(0)
     
     try:
-        # Create a secure filename
-        filename = Path(upload_file.filename).name
-        file_path = os.path.join(upload_dir, filename)
+        # Create a unique, collision-proof filename using UUID
+        clean_name = Path(upload_file.filename).name
+        unique_name = f"{uuid.uuid4().hex}_{clean_name}"
+        file_path = os.path.join(upload_dir, unique_name)
+        
+        # Ensure target directory exists
+        os.makedirs(upload_dir, exist_ok=True)
         
         # Save the file using the content we already read
         with open(file_path, "wb") as buffer:
@@ -93,7 +127,7 @@ async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_s
         
     except Exception as e:
         # Clean up partially written file if it exists
-        if os.path.exists(file_path):
+        if 'file_path' in locals() and os.path.exists(file_path):
             try:
                 os.remove(file_path)
             except:

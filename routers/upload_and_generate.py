@@ -18,10 +18,12 @@ from database import get_db
 from models import Question
 from services.qgen_service import generate_questions_from_content
 from .generate import process_image, process_pdf
-from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension
+from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension, cleanup_files
 from utils.exceptions import AppError
+from utils.usage_limits import resolve_and_enforce_identity, deduct_usage, validate_question_count
 
 router = APIRouter()
+
 logger = logging.getLogger(__name__)
 
 class ProcessingMetrics:
@@ -122,6 +124,8 @@ async def upload_and_generate(
     subject_query: Optional[str] = Query(None, alias="subject"),
     page_range: Optional[str] = Form(None),
     page_range_query: Optional[str] = Query(None, alias="page_range"),
+    mode: Optional[str] = Form(None),
+    mode_query: Optional[str] = Query(None, alias="mode"),
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
     background_tasks: BackgroundTasks = None,
@@ -136,10 +140,18 @@ async def upload_and_generate(
     num_questions = num_questions or num_questions_query or 3
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
+    mode = (mode or mode_query or "exam").lower()
 
-    # Enforce guest max 5 questions limit if unauthenticated
-    if not authorization and not x_api_key and not teacher_id:
-        num_questions = min(num_questions, 5)
+    # Resolve caller identity and enforce usage limits & quotas
+    caller_id = await resolve_and_enforce_identity(
+        db=db,
+        authorization=authorization,
+        x_api_key=x_api_key,
+        teacher_id=teacher_id
+    )
+
+    # Validate and strictly enforce per-upload question limit based on caller tier
+    num_questions = validate_question_count(caller_id, num_questions)
 
     metrics = ProcessingMetrics()
     request_data = {
@@ -149,11 +161,15 @@ async def upload_and_generate(
         "num_questions": num_questions,
         "class_id": class_id,
         "subject": subject,
+        "mode": mode,
         "page_range": page_range,
         "teacher_id": teacher_id,
         "files": files
     }
     
+    saved_files = []
+    file_orig_names = {}
+
     try:
         # Validate files
         metrics.start_stage("validation")
@@ -175,7 +191,6 @@ async def upload_and_generate(
         
         # Process files
         metrics.start_stage("file_processing")
-        saved_files = []
         tasks = []
         
         # Ensure we have a list of files (handle single file case)
@@ -206,6 +221,7 @@ async def upload_and_generate(
                 # Save the uploaded file
                 file_path = await save_upload_file(file, "uploads")
                 saved_files.append(file_path)
+                file_orig_names[file_path] = file.filename
                 
                 # Create processing task based on file type
                 ext = get_file_extension(file_path).lower()
@@ -352,7 +368,8 @@ async def upload_and_generate(
                     num_questions=questions_per_image,
                     class_id=class_id,
                     subject=subject,
-                    blooms_level=blooms_level
+                    blooms_level=blooms_level,
+                    mode=mode
                 )
                 
                 # Parse JSON string if needed
@@ -376,22 +393,23 @@ async def upload_and_generate(
                             continue
                 
                 # Add image source information to each question
+                source_display_name = file_orig_names.get(result.get("file_path", ""), result.get("file_path", f"image_{i+1}"))
                 for q in questions:
                     q["source_image"] = i + 1  # 1-based image index
-                    q["source_file"] = result.get("file_path", f"image_{i+1}")
+                    q["source_file"] = source_display_name
                     if image_description:
                         q["image_description"] = image_description
                 
                 all_questions.extend(questions)
                 image_results.append({
                     "image_index": i + 1,
-                    "file_path": result.get("file_path", f"image_{i+1}"),
+                    "file_path": source_display_name,
                     "text_length": len(image_text),
                     "questions_generated": len(questions),
                     "questions": questions
                 })
             
-            questions = all_questions
+            questions = all_questions[:num_questions]
             
             # Parse the JSON string if needed
             if isinstance(questions, str):
@@ -437,8 +455,8 @@ async def upload_and_generate(
                         answer_text=q["answer"],
                         choices=json.dumps(q.get("choices", [])),
                         rationale=q.get("rationale", ""),
-                        qtype=qtype,
-                        difficulty=difficulty,
+                        qtype=q.get("qtype") or (qtype.split(",")[0] if qtype else "mcq"),
+                        difficulty=q.get("difficulty") or (difficulty.split(",")[0] if difficulty else "medium"),
                         blooms_level=q.get("blooms_level", "Understand"),
                         class_id=class_id,
                         subject=subject,
@@ -489,12 +507,16 @@ async def upload_and_generate(
                     questions_saved=len(db_questions)
                 )
                 
+                # Deduct usage from caller quota pool
+                usage_stats = await deduct_usage(caller_id, db, questions_generated=len(db_questions))
+
                 return {
                     "status": "success",
                     "questions": response_data,
                     "saved_files": saved_files,
                     "processing_metrics": metrics.get_metrics(),
-                    # "image_summary": image_results
+                    "usage": usage_stats,
+                    "limit_hit_warning": usage_stats.get("limit_hit_warning") if usage_stats else None
                 }
                 
             except Exception as e:
@@ -549,8 +571,8 @@ async def upload_and_generate(
         )
         
     finally:
-        # Cleanup resources if needed
-        pass
+        # Extract & Discard: Clean up uploaded files immediately from disk
+        cleanup_files(saved_files)
 
 # Don't forget to include this router in your main FastAPI app
 # from fastapi import FastAPI

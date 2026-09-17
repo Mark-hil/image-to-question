@@ -155,6 +155,8 @@ async def get_tenant_usage(
         "name": tenant.name,
         "tier": tenant.tier,
         "monthly_quota": tenant.monthly_quota,
-        "quota_remaining": tenant.monthly_quota,  # Free tier active
-        "pricing": "Free ($0.00)"
+        "quota_remaining": tenant.monthly_quota,
+        "pricing": "Free ($0.00)" if tenant.tier in ["starter", "free"] else f"{tenant.tier.capitalize()} Tier"
     }
+
+

@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from database import get_db
 from models.tenant import Tenant
+from models.user import User
 from services.paystack_service import PaystackService
 from services.billing_service import BillingService
 
@@ -19,6 +20,8 @@ class InitializePaymentRequest(BaseModel):
     amount: float  # Amount in main currency unit (e.g. 5000 NGN)
     currency: Optional[str] = "NGN"
     tenant_id: Optional[str] = None
+    user_id: Optional[str] = None
+    plan_tier: Optional[str] = "pro"
     callback_url: Optional[str] = None
 
 @router.post("/initialize", status_code=status.HTTP_200_OK)
@@ -31,6 +34,14 @@ async def initialize_payment(
     amount_kobo = int(body.amount * 100)
 
     metadata: Dict[str, Any] = {}
+    if body.user_id:
+        u_res = await db.execute(select(User).where(User.id == body.user_id))
+        user = u_res.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        metadata["user_id"] = user.id
+        metadata["plan_tier"] = body.plan_tier or "pro"
+
     if body.tenant_id:
         result = await db.execute(select(Tenant).where(Tenant.id == body.tenant_id))
         tenant = result.scalar_one_or_none()
@@ -68,13 +79,32 @@ async def verify_payment(
     if transaction_status == "success":
         metadata = data.get("metadata", {})
         tenant_id = metadata.get("tenant_id")
+        user_id = metadata.get("user_id")
+        plan_tier = metadata.get("plan_tier", "pro")
+
+        # Upgrade User subscription
+        if user_id:
+            u_res = await db.execute(select(User).where(User.id == user_id))
+            user = u_res.scalar_one_or_none()
+            if user:
+                user.tier = plan_tier
+                user.monthly_generations_used = 0
+                cust_code = data.get("customer", {}).get("customer_code")
+                if cust_code:
+                    user.paystack_customer_code = cust_code
+                await db.commit()
+                logger.info(f"Verified payment: upgraded user {user_id} to tier '{plan_tier}' and reset quota count")
+
+        # Top up Tenant credits
         if tenant_id:
             result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
             tenant = result.scalar_one_or_none()
             if tenant:
-                # Top up or upgrade tenant quota (e.g. add 10,000 requests)
                 tenant.monthly_quota += 10000
                 tenant.tier = "growth"
+                cust_code = data.get("customer", {}).get("customer_code")
+                if cust_code:
+                    tenant.paystack_customer_code = cust_code
                 await db.commit()
                 logger.info(f"Updated quota for tenant {tenant_id} after successful Paystack transaction {reference}")
 
@@ -113,12 +143,30 @@ async def paystack_webhook(
     if event_type == "charge.success":
         metadata = data.get("metadata", {})
         tenant_id = metadata.get("tenant_id")
+        user_id = metadata.get("user_id")
+        plan_tier = metadata.get("plan_tier", "pro")
+
+        if user_id:
+            u_res = await db.execute(select(User).where(User.id == user_id))
+            user = u_res.scalar_one_or_none()
+            if user:
+                user.tier = plan_tier
+                user.monthly_generations_used = 0
+                cust_code = data.get("customer", {}).get("customer_code")
+                if cust_code:
+                    user.paystack_customer_code = cust_code
+                await db.commit()
+                logger.info(f"Webhook upgraded user {user_id} to tier '{plan_tier}' successfully")
+
         if tenant_id:
             result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
             tenant = result.scalar_one_or_none()
             if tenant:
                 tenant.monthly_quota += 10000
                 tenant.tier = "growth"
+                cust_code = data.get("customer", {}).get("customer_code")
+                if cust_code:
+                    tenant.paystack_customer_code = cust_code
                 await db.commit()
                 logger.info(f"Webhook updated tenant {tenant_id} quota successfully")
 

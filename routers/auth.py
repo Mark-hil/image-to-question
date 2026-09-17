@@ -94,6 +94,13 @@ async def login_user(
     }
 
 @router.get("/me", status_code=status.HTTP_200_OK)
-async def get_me(current_user: User = Depends(get_current_user)):
-    """Retrieve current authenticated user profile."""
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve current authenticated user profile with automatic 30-day quota cycle renewal."""
+    from utils.usage_limits import refresh_user_quota_if_due
+    if refresh_user_quota_if_due(current_user):
+        await db.commit()
+        await db.refresh(current_user)
     return {"user": current_user.to_dict()}

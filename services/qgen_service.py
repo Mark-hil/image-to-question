@@ -1,4 +1,6 @@
 import os
+import random
+from typing import Optional, List
 from config import settings
 from groq import Groq
 import json
@@ -7,7 +9,50 @@ import json
 groq_client = Groq(api_key=settings.GROQ_API_KEY)
 
 # Model configuration
-MODEL_NAME = "llama-3.1-8b-instant"  # Using Groq's LLaMA 3 70B model
+MODEL_NAME = "openai/gpt-oss-120b"  # Using Groq's LLaMA 3 70B model
+
+# Industry-standard cognitive focus angles for dynamic question variety
+FOCUS_ANGLES: List[str] = [
+    "Focus on scenario-based application and real-world problem-solving situations.",
+    "Focus on cause-and-effect relationships, underlying mechanisms, and sequential processes.",
+    "Focus on comparative evaluation, distinguishing similar concepts, and nuanced technical differences.",
+    "Focus on core principles, foundational definitions, and critical conceptual rules.",
+    "Focus on synthesis, interpreting diagrams/descriptions, and multi-step logical deduction.",
+    "Focus on common edge cases, exceptions to rules, and subtle misconception traps."
+]
+
+
+def sample_document_context(
+    content: str,
+    max_chars: int = 3500,
+    chunk_index: int = 0,
+    total_chunks: int = 1,
+    random_jitter: bool = True
+) -> str:
+    """
+    Intelligently samples representative content across the entire uploaded document.
+    If the text exceeds max_chars, it distributes windows across the document length
+    based on chunk_index / total_chunks, ensuring multi-page PDFs and slides are assessed.
+    """
+    if not content:
+        return ""
+    cleaned = content.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    usable_range = len(cleaned) - max_chars
+    stride = usable_range // max(1, total_chunks)
+    base_start = min(usable_range, chunk_index * stride)
+
+    if random_jitter and usable_range > 300:
+        jitter = random.randint(-120, 120)
+        start_idx = max(0, min(usable_range, base_start + jitter))
+    else:
+        start_idx = base_start
+
+    excerpt = cleaned[start_idx:start_idx + max_chars]
+    section_num = (start_idx * total_chunks // usable_range) + 1 if usable_range > 0 else 1
+    return f"[Document Excerpt (Section {section_num} of {total_chunks}, ~{len(cleaned)} total characters)]:\n...{excerpt}..."
 
 
 def build_prompt(
@@ -19,7 +64,11 @@ def build_prompt(
     num_questions: int = 3,
     class_id: str = None,
     subject: str = None,
-    blooms_level: str = "all"
+    blooms_level: str = "all",
+    mode: str = "exam",
+    chunk_index: int = 0,
+    total_chunks: int = 1,
+    variation_seed: Optional[int] = None
 ) -> str:
     """
     Build a prompt for question generation using Groq.
@@ -34,6 +83,10 @@ def build_prompt(
         class_id: The class/grade level the questions are for (e.g., 'Grade 5')
         subject: The subject of the questions (e.g., 'Math', 'Science')
         blooms_level: Target Bloom's Taxonomy cognitive level ('all', 'Remember', 'Understand', 'Apply', 'Analyze', 'Evaluate', 'Create')
+        mode: 'exam' (summative assessment with plausible distractors) or 'practice' (formative self-study with hints)
+        chunk_index: Current batch window index
+        total_chunks: Total batches across the document
+        variation_seed: Optional seed for cognitive angle rotation
     """
     # Add class and subject context to the prompt
     context_parts = []
@@ -46,136 +99,179 @@ def build_prompt(
     if context:
         context = f"CONTEXT:\n{context}\n\n"
 
+    # Parse multi-select question formats
+    if isinstance(qtype, list):
+        selected_types = [t.strip().lower() for t in qtype if t.strip()]
+    else:
+        selected_types = [t.strip().lower() for t in str(qtype).split(",") if t.strip()]
+    if not selected_types:
+        selected_types = ['mcq']
+
+    # Parse multi-select difficulty levels
+    if isinstance(difficulty, list):
+        selected_diffs = [d.strip().lower() for d in difficulty if d.strip()]
+    else:
+        selected_diffs = [d.strip().lower() for d in str(difficulty).split(",") if d.strip()]
+    if not selected_diffs:
+        selected_diffs = ['medium']
+
+    # Parse multi-select Bloom's cognitive levels
+    if isinstance(blooms_level, list):
+        selected_blooms = [b.strip().capitalize() for b in blooms_level if b.strip()]
+    else:
+        selected_blooms = [b.strip().capitalize() for b in str(blooms_level).split(",") if b.strip()]
+    if not selected_blooms:
+        selected_blooms = ['All']
+
+    is_all_blooms = any(b.lower() == 'all' for b in selected_blooms)
+
     blooms_spec_instruction = ""
-    if blooms_level and blooms_level.lower() != "all":
-        target_cap = blooms_level.strip().capitalize()
-        blooms_spec_instruction = f"\n5. MANDATORY BLOOM'S TAXONOMY SPECIFICATION:\n   - User target cognitive level: '{target_cap}'\n   - EVERY generated question MUST target the '{target_cap}' level of Bloom's Taxonomy cognitive domain.\n   - Set \"blooms_level\": \"{target_cap}\" in the JSON object for each question.\n"
-
-    # Define question type specific instructions
-    qtype_instructions = {
-        'mcq': """
-MULTIPLE CHOICE (MCQ) QUESTIONS - FOLLOW THESE RULES STRICTLY:
-
-1. YOU MUST RETURN A JSON ARRAY OF QUESTION OBJECTS.
-2. EACH QUESTION OBJECT MUST HAVE:
-   - "question": The question text (string, required)
-   - "answer": The correct answer ("A", "B", "C", or "D") (required)
-   - "choices": An array of exactly 4 strings (required)
-   - "rationale": Explanation of the answer (string, required)
-   - "blooms_level": Bloom's Taxonomy cognitive level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create") (string, required)
-
-3. EXAMPLE OF A VALID RESPONSE:
-```json
-[
-  {
-    "question": "What is the main theme of the book?",
-    "answer": "A",
-    "choices": [
-      "Financial education and wealth building",
-      "Historical events",
-      "Scientific discoveries",
-      "Fictional stories"
-    ],
-    "rationale": "The book focuses on teaching financial literacy.",
-    "blooms_level": "Understand"
-  }
-]
-```
-
-4. IMPORTANT RULES:
-   - Return ONLY the JSON array, nothing else
-   - No markdown formatting (no ```json or ```)
-   - No additional text before or after the JSON
-   - All questions must be different
-   - All choices must be plausible but only one correct
-   - The 'answer' must be one of: "A", "B", "C", or "D"
-   - The 'choices' array must have exactly 4 items
-   - Each choice should be a complete sentence or phrase
-   - The rationale should explain why the answer is correct
-   - Tag each question with its exact Bloom's Taxonomy level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create")
-""",
-        'true_false': """
-TRUE/FALSE QUESTIONS - FOLLOW THESE RULES:
-
-1. RETURN A JSON ARRAY OF QUESTION OBJECTS
-2. EACH QUESTION MUST HAVE:
-   - "question": A statement (string)
-   - "answer": "True" or "False" (exactly, case-sensitive)
-   - "rationale": Explanation (string)
-   - "blooms_level": Bloom's Taxonomy level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create") (string)
-
-EXAMPLE:
-```json
-[
-  {
-    "question": "The book was published in 2020.",
-    "answer": "True",
-    "rationale": "The book was indeed published in 2020.",
-    "blooms_level": "Remember"
-  }
-]
-```
-""",
-        'short_answer': """
-SHORT ANSWER QUESTIONS - FOLLOW THESE RULES:
-
-1. RETURN A JSON ARRAY OF QUESTION OBJECTS
-2. EACH QUESTION MUST HAVE:
-   - "question": The question (string)
-   - "answer": A brief answer (1-2 sentences, string)
-   - "rationale": Explanation (string)
-   - "blooms_level": Bloom's Taxonomy level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create") (string)
-
-EXAMPLE:
-```json
-[
-  {
-    "question": "What is the main purpose of the book?",
-    "answer": "To teach financial literacy and wealth building strategies.",
-    "rationale": "The book focuses on financial education.",
-    "blooms_level": "Analyze"
-  }
-]
-```
+    if not is_all_blooms:
+        blooms_str = ", ".join(selected_blooms)
+        blooms_spec_instruction = f"""
+MANDATORY BLOOM'S TAXONOMY SPECIFICATION:
+- Target cognitive level(s): {blooms_str}
+- EVERY generated question MUST target one of these selected Bloom's cognitive domain levels: {blooms_str}.
+- Set "blooms_level" to the exact matched level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create") in each question object.
 """
-    }
 
-    # Add difficulty-specific instructions
+    # Generation Mode Specification
+    mode_normalized = (mode or "exam").lower()
+    if mode_normalized == "practice":
+        mode_header = "SELF-STUDY & PRACTICE MODE (Formative Mastery)"
+        mode_instruction = """- Design formative questions optimized for student self-study, active recall, and conceptual review.
+- Reinforce foundational comprehension, key definitions, and step-by-step logic.
+- Rationales must be rich, encouraging, and detailed to guide student self-correction and mastery.
+- Frame answer explanations with clear hints and educational reasoning."""
+    else:
+        mode_header = "EXAM & ASSESSMENT MODE (Summative Rigor)"
+        mode_instruction = """- Design rigorous, exam-grade assessment items for tests, quizzes, and LMS exams.
+- Craft highly plausible, realistic distractors (wrong choices) that deliberately target common student misconceptions, subtle calculation traps, or false cognates.
+- Use novel situational scenarios and applied problem statements rather than direct verbatim quotes, preventing students from guessing by pure rote recall.
+- Ensure all questions are defensible with pedagogical rationales."""
+
+    # Dynamic cognitive focus angle
+    seed_idx = variation_seed if variation_seed is not None else random.randint(0, len(FOCUS_ANGLES) - 1)
+    focus_angle = FOCUS_ANGLES[seed_idx % len(FOCUS_ANGLES)]
+
+    # Difficulty instructions mapping
     difficulty_instructions = {
-        'easy': "Use simple language and focus on basic concepts. Questions should test recall and basic understanding (Bloom's: Remember, Understand).",
-        'medium': "Include some complexity in the questions and answers. Test application of concepts (Bloom's: Apply, Analyze).",
-        'hard': "Create challenging questions that require analysis, evaluation, or synthesis of information (Bloom's: Evaluate, Create)."
+        'easy': "Easy: Use simple language and focus on basic concepts. Questions test recall and foundational understanding.",
+        'medium': "Medium: Include analytical depth. Test application and comprehension of concepts.",
+        'hard': "Hard: Create challenging questions requiring critical analysis, evaluation, or multi-step reasoning."
+    }
+    diff_text = " / ".join([difficulty_instructions.get(d, d.capitalize()) for d in selected_diffs])
+
+    # Question format rules and examples
+    format_rules = {
+        'mcq': """- MULTIPLE CHOICE (MCQ):
+  * "qtype": "mcq"
+  * "question": The question text (string)
+  * "answer": The correct choice letter ("A", "B", "C", or "D") OR the full text of the correct choice
+  * "choices": An array of EXACTLY 4 distinct option strings
+  * "rationale": Clear pedagogical explanation of why the answer is correct
+  * "blooms_level": Cognitive level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create")""",
+        'true_false': """- TRUE / FALSE:
+  * "qtype": "true_false"
+  * "question": A definitive factual statement to evaluate (string)
+  * "answer": EXACTLY "True" or "False"
+  * "choices": ["True", "False"]
+  * "rationale": Factual explanation referencing the source text
+  * "blooms_level": Cognitive level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create")""",
+        'short_answer': """- SHORT ANSWER (Open Response):
+  * "qtype": "short_answer"
+  * "question": An open-ended question testing understanding (string)
+  * "answer": A concise, exemplary model answer (1-2 sentences)
+  * "choices": [] (empty array)
+  * "rationale": Rubric or key concepts needed for full credit
+  * "blooms_level": Cognitive level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create")"""
     }
 
-    return f"""{context}You are an expert educational content creator. Generate EXACTLY {num_questions} high-quality {qtype} questions at {difficulty} difficulty level for {class_id} in {subject}.
+    # Generate format requirements block
+    if len(selected_types) == 1:
+        single_type = selected_types[0]
+        type_reqs = format_rules.get(single_type, format_rules['mcq'])
+        qtype_header = f"{single_type.upper()} format"
+        mix_instruction = f"All {num_questions} questions must be {single_type.upper()}."
+    else:
+        types_joined = ", ".join([t.upper() for t in selected_types])
+        type_reqs = "\n".join([format_rules[t] for t in selected_types if t in format_rules])
+        qtype_header = f"MIXED FORMATS ({types_joined})"
+        mix_instruction = f"Distribute the {num_questions} questions evenly across the selected formats: {types_joined}. You MUST include the correct 'qtype' property ('{'', ''.join(selected_types)}') on every single question object."
 
-IMPORTANT INSTRUCTIONS - READ CAREFULLY:
-1. CONTEXT TO USE (base your questions on this content):
-   - ORIGINAL TEXT: {text[:1000]}{'...' if len(text) > 1000 else ''}
-   - REFINED TEXT: {refined_text[:1000] if refined_text else 'N/A'}{'...' if refined_text and len(refined_text) > 1000 else ''}
-   - IMAGE DESCRIPTION: {description if description else 'N/A'}
+    sample_items = []
+    if 'mcq' in selected_types:
+        sample_items.append({
+            "qtype": "mcq",
+            "question": "What is the primary function of mitochondria?",
+            "choices": ["ATP energy production", "Protein synthesis", "Lipid digestion", "Cell division"],
+            "answer": "A",
+            "rationale": "Mitochondria generate most of the chemical energy needed by the cell.",
+            "blooms_level": "Remember",
+            "difficulty": selected_diffs[0]
+        })
+    if 'true_false' in selected_types:
+        sample_items.append({
+            "qtype": "true_false",
+            "question": "Mitochondria possess their own independent circular DNA.",
+            "choices": ["True", "False"],
+            "answer": "True",
+            "rationale": "Mitochondria contain mitochondrial DNA (mtDNA) inherited maternally.",
+            "blooms_level": "Understand",
+            "difficulty": selected_diffs[min(1, len(selected_diffs) - 1)]
+        })
+    if 'short_answer' in selected_types:
+        sample_items.append({
+            "qtype": "short_answer",
+            "question": "Explain why mitochondria are referred to as the powerhouse of the cell.",
+            "choices": [],
+            "answer": "They generate adenosine triphosphate (ATP) through cellular respiration to fuel cellular activities.",
+            "rationale": "Students should identify ATP synthesis and aerobic respiration.",
+            "blooms_level": "Analyze",
+            "difficulty": selected_diffs[-1]
+        })
 
-2. DIFFICULTY LEVEL: {difficulty_instructions.get(difficulty, '')}
+    example_json = json.dumps(sample_items, indent=2)
 
-3. QUESTION TYPE REQUIREMENTS:
-{qtype_instructions.get(qtype, '')}
+    # Intelligently sample multi-page document context
+    sampled_text = sample_document_context(text, max_chars=3500, chunk_index=chunk_index, total_chunks=total_chunks)
+    sampled_refined = sample_document_context(refined_text, max_chars=3500, chunk_index=chunk_index, total_chunks=total_chunks) if refined_text else ""
+
+    return f"""{context}You are an expert pedagogical exam architect and assessment designer.
+OPERATIONAL DIRECTIVE: {mode_header}
+{mode_instruction}
+
+COGNITIVE DIVERSITY ANGLE:
+{focus_angle}
+
+Generate EXACTLY {num_questions} high-quality questions at [{', '.join(selected_diffs).upper()}] difficulty for {class_id or 'Secondary/High School'} in {subject or 'General Studies'}.
+
+1. CONTEXT CONTENT:
+- ORIGINAL TEXT:
+{sampled_text}
+- REFINED OCR/EXTRACTION TEXT:
+{sampled_refined if sampled_refined else 'N/A'}
+- IMAGE/DIAGRAM DESCRIPTION:
+{description if description else 'N/A'}
+
+2. DIFFICULTY SPECIFICATION:
+{diff_text}
+
+3. QUESTION FORMAT REQUIREMENTS ({qtype_header}):
+{mix_instruction}
+
+Each question object in your JSON output must follow these schemas:
+{type_reqs}
 {blooms_spec_instruction}
-4. RESPONSE FORMAT REQUIREMENTS:
-   - Respond ONLY with a valid JSON array of question objects
-   - Do NOT include any additional text or markdown formatting
-   - The JSON must be properly formatted and parseable
-   - Generate EXACTLY {num_questions} questions
-   - Include "blooms_level" for every question
-   - If you can't generate the requested number of questions, return an error object
+4. STRICT OUTPUT RULES:
+- Respond ONLY with a valid JSON array of question objects
+- Do NOT output markdown ticks or conversational text
+- Generate EXACTLY {num_questions} questions
+- Ensure all questions are derived strictly from the provided text context
+- Set "qtype", "difficulty", and "blooms_level" on each question object
 
-5. FINAL REMINDER - YOUR RESPONSE MUST:
-   - Be valid JSON that can be parsed with json.loads()
-   - Include ALL required fields for each question type (including blooms_level)
-   - Have no text before or after the JSON array
-   - Be properly escaped and formatted
-
-6. EXAMPLE OF A VALID RESPONSE (for {qtype}):
-{qtype_instructions.get(qtype, '').split('EXAMPLE:')[-1].split('```json')[-1].split('```')[0].strip() if 'EXAMPLE:' in qtype_instructions.get(qtype, '') else '[]'}
+EXAMPLE VALID JSON ARRAY:
+{example_json}
 """
 
 
@@ -189,10 +285,12 @@ def generate_questions_from_content(
     max_retries: int = 2,
     class_id: str = None,
     subject: str = None,
-    blooms_level: str = "all"
+    blooms_level: str = "all",
+    mode: str = "exam"
 ) -> str:
     """
-    Generate questions from the given text using Groq's LLaMA model.
+    Generate questions from the given text using Groq's model with multi-selection support,
+    intelligent multi-chunk document sampling, and exam vs practice mode separation.
     """
     if not text.strip() and not refined_text.strip():
         return json.dumps([{"error": "No text content provided"}])
@@ -203,16 +301,56 @@ def generate_questions_from_content(
     # If no refined text is provided, use the original text
     if not refined_text.strip():
         refined_text = text
-        
+
+    # Parse multi-select collections
+    if isinstance(qtype, list):
+        selected_types = [t.strip().lower() for t in qtype if t.strip()]
+    else:
+        selected_types = [t.strip().lower() for t in str(qtype).split(",") if t.strip()]
+    if not selected_types:
+        selected_types = ["mcq"]
+
+    if isinstance(difficulty, list):
+        selected_diffs = [d.strip().lower() for d in difficulty if d.strip()]
+    else:
+        selected_diffs = [d.strip().lower() for d in str(difficulty).split(",") if d.strip()]
+    if not selected_diffs:
+        selected_diffs = ["medium"]
+
+    if isinstance(blooms_level, list):
+        selected_blooms = [b.strip().capitalize() for b in blooms_level if b.strip()]
+    else:
+        selected_blooms = [b.strip().capitalize() for b in str(blooms_level).split(",") if b.strip()]
+    if not selected_blooms:
+        selected_blooms = ["All"]
+
     BATCH_SIZE = 10
     total_needed = max(1, num_questions)
+    total_batches = max(1, (total_needed + BATCH_SIZE - 1) // BATCH_SIZE)
     all_processed = []
 
-    # Loop through batches to handle large requests (e.g. 50 questions) without LLM token truncation
+    # Temperature 0.6 balances factual grounding with question/distractor diversity
+    effective_temp = 0.6 if mode == "exam" else 0.5
+
     remaining = total_needed
     while remaining > 0:
         chunk_count = min(BATCH_SIZE, remaining)
-        prompt = build_prompt(text, refined_text, description, qtype, difficulty, chunk_count, class_id, subject, blooms_level)
+        batch_idx = len(all_processed) // BATCH_SIZE
+        prompt = build_prompt(
+            text=text,
+            refined_text=refined_text,
+            description=description,
+            qtype=qtype,
+            difficulty=difficulty,
+            num_questions=chunk_count,
+            class_id=class_id,
+            subject=subject,
+            blooms_level=blooms_level,
+            mode=mode,
+            chunk_index=batch_idx,
+            total_chunks=total_batches,
+            variation_seed=random.randint(1, 1000000)
+        )
         
         batch_success = False
         for attempt in range(max_retries + 1):
@@ -222,15 +360,15 @@ def generate_questions_from_content(
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a helpful assistant that generates educational questions in JSON format. Follow all instructions precisely."
+                            "content": "You are a helpful educational assessment generator that outputs strictly valid JSON arrays of question objects."
                         },
                         {
                             "role": "user",
                             "content": prompt
                         }
                     ],
-                    temperature=0.3,
-                    max_tokens=4096,
+                    temperature=effective_temp,
+                    max_tokens=2048,
                     top_p=0.9,
                     stream=False,
                     stop=None,
@@ -252,43 +390,70 @@ def generate_questions_from_content(
                 if not isinstance(questions, list):
                     questions = [questions]
                     
+                valid_blooms = ["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"]
+                valid_types = ["mcq", "true_false", "short_answer"]
+                valid_diffs = ["easy", "medium", "hard"]
+
                 for q in questions:
                     if not isinstance(q, dict):
                         continue
-                        
-                    valid_blooms = ["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"]
                     
-                    if blooms_level and blooms_level.lower() != "all":
-                        target_blooms = blooms_level.strip().capitalize()
-                        final_blooms = target_blooms if target_blooms in valid_blooms else "Understand"
+                    # 1. Resolve Question Type
+                    raw_type = str(q.get("qtype") or q.get("type", "")).strip().lower()
+                    if raw_type in valid_types:
+                        item_qtype = raw_type
+                    elif "choices" in q and isinstance(q["choices"], list) and len(q["choices"]) >= 3:
+                        item_qtype = "mcq"
+                    elif str(q.get("answer", "")).strip().lower() in ["true", "false"]:
+                        item_qtype = "true_false"
+                    elif "short_answer" in selected_types:
+                        item_qtype = "short_answer"
                     else:
-                        default_blooms = "Understand"
-                        if difficulty == "easy":
-                            default_blooms = "Remember"
-                        elif difficulty == "hard":
-                            default_blooms = "Analyze"
-                        raw_blooms = str(q.get("blooms_level", "")).strip().capitalize()
-                        final_blooms = raw_blooms if raw_blooms in valid_blooms else default_blooms
+                        item_qtype = selected_types[len(all_processed) % len(selected_types)]
+
+                    # 2. Resolve Difficulty
+                    raw_diff = str(q.get("difficulty", "")).strip().lower()
+                    if raw_diff in valid_diffs:
+                        item_diff = raw_diff
+                    else:
+                        item_diff = selected_diffs[len(all_processed) % len(selected_diffs)]
+
+                    # 3. Resolve Bloom's Level
+                    raw_bloom = str(q.get("blooms_level", "")).strip().capitalize()
+                    if raw_bloom in valid_blooms:
+                        item_bloom = raw_bloom
+                    elif not any(b.lower() == 'all' for b in selected_blooms) and selected_blooms:
+                        valid_selected = [b for b in selected_blooms if b in valid_blooms]
+                        item_bloom = valid_selected[len(all_processed) % len(valid_selected)] if valid_selected else "Understand"
+                    else:
+                        if item_diff == "easy":
+                            item_bloom = "Remember"
+                        elif item_diff == "hard":
+                            item_bloom = "Analyze"
+                        else:
+                            item_bloom = "Understand"
 
                     processed_q = {
                         "question": q.get("question", "").strip() or "No question provided",
                         "answer": "",
                         "rationale": q.get("rationale", "No rationale provided.").strip(),
-                        "qtype": qtype,
-                        "difficulty": difficulty,
-                        "blooms_level": final_blooms
+                        "qtype": item_qtype,
+                        "difficulty": item_diff,
+                        "blooms_level": item_bloom,
+                        "choices": []
                     }
                     
                     if "answer" in q:
                         processed_q["answer"] = str(q["answer"]).strip()
                     elif "correct" in q:
                         processed_q["answer"] = str(q["correct"]).strip()
-                        
-                    if qtype == "mcq":
+
+                    # Handle type-specific fields
+                    if item_qtype == "mcq":
                         if "choices" in q and isinstance(q["choices"], list):
-                            processed_q["choices"] = [str(choice).strip() for choice in q["choices"][:4]]
+                            processed_q["choices"] = [str(c).strip() for c in q["choices"][:4]]
                         elif "options" in q and isinstance(q["options"], list):
-                            processed_q["choices"] = [str(option).strip() for option in q["options"][:4]]
+                            processed_q["choices"] = [str(o).strip() for o in q["options"][:4]]
                         else:
                             processed_q["choices"] = ["Option A", "Option B", "Option C", "Option D"]
                             
@@ -299,6 +464,17 @@ def generate_questions_from_content(
                             idx = ord(processed_q["answer"].upper()) - ord('A')
                             if 0 <= idx < len(processed_q["choices"]):
                                 processed_q["answer"] = processed_q["choices"][idx]
+                    elif item_qtype == "true_false":
+                        processed_q["choices"] = ["True", "False"]
+                        ans_lower = processed_q["answer"].lower()
+                        if ans_lower in ["true", "t"]:
+                            processed_q["answer"] = "True"
+                        elif ans_lower in ["false", "f"]:
+                            processed_q["answer"] = "False"
+                        else:
+                            processed_q["answer"] = "True"
+                    else:  # short_answer
+                        processed_q["choices"] = []
                     
                     if not processed_q["question"] or not processed_q["answer"]:
                         continue

@@ -21,10 +21,13 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
     try {
       const finalAmountUSD = billingCycle === 'yearly' ? amountUSD * 10 : amountUSD;
       const amountNGN = finalAmountUSD * 1500;
-      const res = await api.initializePayment(user.email, amountNGN);
+      const planTier = planName.toLowerCase().includes('team') || planName.toLowerCase().includes('institution') ? 'team' : 'pro';
+      const res = await api.initializePayment(user.email, amountNGN, undefined, user.id, planTier);
       if (res.checkout_url) {
         window.location.href = res.checkout_url;
       }
+
+
     } catch (err: any) {
       alert(err.message || 'Failed to initialize Paystack checkout.');
     } finally {
@@ -99,9 +102,14 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '28px', alignItems: 'stretch' }}>
         
         {/* Free Plan */}
-        <div className="glass-panel" style={{ padding: '36px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <div className="glass-panel" style={{ padding: '36px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', border: (!user || user.tier === 'free') ? '1px solid rgba(16, 185, 129, 0.4)' : undefined }}>
           <div>
-            <span className="badge badge-emerald" style={{ marginBottom: '18px' }}>Starter</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+              <span className="badge badge-emerald">Starter</span>
+              {(!user || user.tier === 'free') && (
+                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34D399', fontSize: '0.72rem' }}>Current Plan</span>
+              )}
+            </div>
             <h3 style={{ fontSize: '1.6rem', fontWeight: 800 }}>Free Educator</h3>
             <p style={{ color: '#94A3B8', fontSize: '0.88rem', marginTop: '4px' }}>Essential AI question generation for single classroom testing.</p>
             
@@ -112,22 +120,25 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
 
             <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '0.92rem', color: '#CBD5E1' }}>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> 1,000 Free Questions / month
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>6 Quiz Generations / month</strong> (~1-2 weekly quizzes)
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Standard OCR Text Extraction
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Up to 20 Questions per quiz</strong> (max 120 Qs/mo)
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> MCQ & True/False Generator
+                <Check size={18} color="#10B981" /> Auto-renews every 30 days
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Plain Text (.txt) Export
+                <Check size={18} color="#10B981" /> MCQ, True/False & Short Answer
+              </li>
+              <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Check size={18} color="#10B981" /> Copy to Clipboard, JSON & CSV Export
               </li>
             </ul>
           </div>
 
           <button className="btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: '36px', borderRadius: '12px' }} disabled>
-            Current Active Plan
+            {(!user || user.tier === 'free') ? 'Current Active Plan' : 'Included'}
           </button>
         </div>
 
@@ -137,19 +148,21 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          border: '2px solid #6366F1',
+          border: user?.tier === 'pro' ? '2px solid #10B981' : '2px solid #6366F1',
           boxShadow: '0 0 35px rgba(99, 102, 241, 0.3)',
           position: 'relative',
           background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(15, 23, 42, 0.85) 100%)'
         }}>
           <div style={{ position: 'absolute', top: '-14px', right: '24px' }}>
             <span className="badge badge-indigo" style={{ background: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)', color: '#FFF', border: 'none', padding: '6px 14px' }}>
-              MOST POPULAR
+              {user?.tier === 'pro' ? 'ACTIVE PLAN' : 'MOST POPULAR'}
             </span>
           </div>
 
           <div>
-            <span className="badge badge-indigo" style={{ marginBottom: '18px' }}>Pro Educator</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+              <span className="badge badge-indigo">Pro Educator</span>
+            </div>
             <h3 style={{ fontSize: '1.6rem', fontWeight: 800 }}>Pro Educator</h3>
             <p style={{ color: '#94A3B8', fontSize: '0.88rem', marginTop: '4px' }}>High-speed vision processing with MS Word and Canvas exports.</p>
 
@@ -162,37 +175,51 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
 
             <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '0.92rem', color: '#CBD5E1' }}>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> 10,000 Questions / month
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>50 Document Uploads / month</strong>
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Groq Qwen3.6 Vision VLM Engine
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Up to 35 Questions per quiz</strong> (max 1,000 Qs/mo)
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Microsoft Word (.docx) Export</strong>
+                <Check size={18} color="#10B981" /> Groq Vision VLM & Bloom's Taxonomy Targeting
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Canvas LMS QTI 2.1 Zip Export
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Microsoft Word (.docx) with Answer Keys</strong>
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Saved Quiz Library & Online Editor
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Canvas / Moodle / Blackboard LMS (QTI)</strong>
+              </li>
+              <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Check size={18} color="#10B981" /> Multi-Page & Chapter PDF Scanner
               </li>
             </ul>
           </div>
 
-          <button
-            onClick={() => handlePaystackCheckout('Pro Educator', 19)}
-            disabled={loadingPlan === 'Pro Educator'}
-            className="btn-primary"
-            style={{ width: '100%', justifyContent: 'center', marginTop: '36px', padding: '14px', borderRadius: '12px' }}
-          >
-            {loadingPlan === 'Pro Educator' ? 'Connecting to Paystack...' : 'Upgrade with Paystack'} <ExternalLink size={16} />
-          </button>
+          {user?.tier === 'pro' ? (
+            <button className="btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: '36px', borderRadius: '12px' }} disabled>
+              Current Active Plan
+            </button>
+          ) : (
+            <button
+              onClick={() => handlePaystackCheckout('Pro Educator', 19)}
+              disabled={loadingPlan === 'Pro Educator'}
+              className="btn-primary"
+              style={{ width: '100%', justifyContent: 'center', marginTop: '36px', padding: '14px', borderRadius: '12px' }}
+            >
+              {loadingPlan === 'Pro Educator' ? 'Connecting to Paystack...' : 'Upgrade with Paystack'} <ExternalLink size={16} />
+            </button>
+          )}
         </div>
 
         {/* Team / School Plan */}
-        <div className="glass-panel" style={{ padding: '36px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <div className="glass-panel" style={{ padding: '36px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', border: (user?.tier === 'team' || user?.tier === 'institution') ? '2px solid #10B981' : undefined }}>
           <div>
-            <span className="badge badge-purple" style={{ marginBottom: '18px' }}>Institution</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+              <span className="badge badge-purple">Institution</span>
+              {(user?.tier === 'team' || user?.tier === 'institution') && (
+                <span className="badge badge-emerald" style={{ fontSize: '0.72rem' }}>ACTIVE PLAN</span>
+              )}
+            </div>
             <h3 style={{ fontSize: '1.6rem', fontWeight: 800 }}>School & Department</h3>
             <p style={{ color: '#94A3B8', fontSize: '0.88rem', marginTop: '4px' }}>Multi-teacher seats with shared institution question bank repository.</p>
 
@@ -205,28 +232,34 @@ export const PricingPage: React.FC<PricingPageProps> = ({ user, onOpenAuth }) =>
 
             <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '0.92rem', color: '#CBD5E1' }}>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> 50,000 Questions / month
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>250 Document Uploads / month</strong>
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> 5 Included Teacher Accounts
+                <Check size={18} color="#10B981" /> <strong style={{ color: '#FFF' }}>Up to 50 Questions per quiz</strong> (max 5,000 Qs/mo)
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Shared Institution Library
+                <Check size={18} color="#10B981" /> 5 Included Teacher Accounts (50 uploads each)
               </li>
               <li style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Check size={18} color="#10B981" /> Dedicated Priority Processing
+                <Check size={18} color="#10B981" /> Shared Department Library & Priority Queue
               </li>
             </ul>
           </div>
 
-          <button
-            onClick={() => handlePaystackCheckout('School & Department', 79)}
-            disabled={loadingPlan === 'School & Department'}
-            className="btn-primary"
-            style={{ width: '100%', justifyContent: 'center', marginTop: '36px', borderRadius: '12px', background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)' }}
-          >
-            {loadingPlan === 'School & Department' ? 'Connecting to Paystack...' : 'Upgrade Team Plan'} <ExternalLink size={16} />
-          </button>
+          {(user?.tier === 'team' || user?.tier === 'institution') ? (
+            <button className="btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: '36px', borderRadius: '12px' }} disabled>
+              Current Active Plan
+            </button>
+          ) : (
+            <button
+              onClick={() => handlePaystackCheckout('School & Department', 79)}
+              disabled={loadingPlan === 'School & Department'}
+              className="btn-primary"
+              style={{ width: '100%', justifyContent: 'center', marginTop: '36px', borderRadius: '12px', background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)' }}
+            >
+              {loadingPlan === 'School & Department' ? 'Connecting to Paystack...' : 'Upgrade Team Plan'} <ExternalLink size={16} />
+            </button>
+          )}
         </div>
       </div>
 

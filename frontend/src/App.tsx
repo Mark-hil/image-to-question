@@ -69,6 +69,8 @@ export function App() {
               token={token}
               onOpenAuth={() => setIsAuthOpen(true)}
               onNavigateToLibrary={() => setActiveTab('library')}
+              onNavigateToPricing={() => setActiveTab('pricing')}
+              onRefreshUser={() => { if (token) api.getMe(token).then(setUser); }}
             />
           )}
 

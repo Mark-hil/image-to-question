@@ -8,13 +8,15 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks, Query, Header
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import async_session_maker
+from database import async_session_maker, get_db
 from models import Question
 from services.qgen_service import generate_questions_from_content
 from .generate import process_image, process_pdf
-from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension
+from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension, cleanup_files
 from utils.exceptions import AppError
+from utils.usage_limits import resolve_and_enforce_identity, deduct_usage, CallerIdentity, validate_question_count
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -42,7 +44,9 @@ async def run_async_generation_task(
     subject: Optional[str],
     teacher_id: Optional[str],
     blooms_level: str = "all",
-    page_range: str = ""
+    page_range: str = "",
+    caller_id: Optional[CallerIdentity] = None,
+    mode: str = "exam"
 ):
     """Background worker function executing vision extractions, LLM generation, and DB storage."""
     try:
@@ -109,7 +113,8 @@ async def run_async_generation_task(
                 num_questions=questions_per_image,
                 class_id=class_id,
                 subject=subject,
-                blooms_level=blooms_level
+                blooms_level=blooms_level,
+                mode=mode
             )
 
             if isinstance(raw_questions, str):
@@ -129,6 +134,9 @@ async def run_async_generation_task(
         tasks_store[task_id]["stage"] = "Questions generated and classified. Saving to PostgreSQL Database..."
         tasks_store[task_id]["updated_at"] = datetime.utcnow().isoformat()
 
+        # Enforce strict question count ceiling
+        all_questions = all_questions[:num_questions]
+
         # Step 3: Save to Database using fresh session
         response_data = []
         async with async_session_maker() as db:
@@ -140,8 +148,8 @@ async def run_async_generation_task(
                     answer_text=q.get("answer", ""),
                     choices=json.dumps(q.get("choices", [])),
                     rationale=q.get("rationale", ""),
-                    qtype=qtype,
-                    difficulty=difficulty,
+                    qtype=q.get("qtype") or (qtype.split(",")[0] if qtype else "mcq"),
+                    difficulty=q.get("difficulty") or (difficulty.split(",")[0] if difficulty else "medium"),
                     blooms_level=q.get("blooms_level", "Understand"),
                     class_id=class_id,
                     subject=subject,
@@ -177,11 +185,18 @@ async def run_async_generation_task(
                 }
                 response_data.append(question_data)
 
+            # Deduct usage from caller quota pool
+            usage_stats = None
+            if caller_id:
+                usage_stats = await deduct_usage(caller_id, db, questions_generated=len(db_questions))
+
         # Step 4: Mark Complete
         tasks_store[task_id]["status"] = "completed"
         tasks_store[task_id]["progress"] = 100
         tasks_store[task_id]["stage"] = "Generation complete! Question bank ready."
         tasks_store[task_id]["questions"] = response_data
+        tasks_store[task_id]["usage"] = usage_stats
+        tasks_store[task_id]["limit_hit_warning"] = usage_stats.get("limit_hit_warning") if usage_stats else None
         tasks_store[task_id]["updated_at"] = datetime.utcnow().isoformat()
         logger.info(f"Task {task_id} completed successfully with {len(response_data)} questions.")
 
@@ -191,6 +206,9 @@ async def run_async_generation_task(
         tasks_store[task_id]["error"] = str(e)
         tasks_store[task_id]["stage"] = f"Failed with error: {str(e)}"
         tasks_store[task_id]["updated_at"] = datetime.utcnow().isoformat()
+    finally:
+        # Extract & Discard: Clean up uploaded files immediately from disk
+        cleanup_files(saved_files)
 
 
 @router.post("/generate-async", response_model=AsyncGenerateResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -211,8 +229,11 @@ async def generate_questions_async(
     subject_query: Optional[str] = Query(None, alias="subject"),
     page_range: Optional[str] = Form(None),
     page_range_query: Optional[str] = Query(None, alias="page_range"),
+    mode: Optional[str] = Form(None),
+    mode_query: Optional[str] = Query(None, alias="mode"),
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Initialize an asynchronous background task to extract text and generate questions.
@@ -224,10 +245,18 @@ async def generate_questions_async(
     num_questions = num_questions or num_questions_query or 3
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
+    mode = (mode or mode_query or "exam").lower()
 
-    # Enforce guest max 5 questions limit if unauthenticated
-    if not authorization and not x_api_key and not teacher_id:
-        num_questions = min(num_questions, 5)
+    # Resolve caller identity and enforce usage limits & quotas
+    caller_id = await resolve_and_enforce_identity(
+        db=db,
+        authorization=authorization,
+        x_api_key=x_api_key,
+        teacher_id=teacher_id
+    )
+
+    # Enforce tier-appropriate maximum questions per quiz
+    num_questions = validate_question_count(caller_id, num_questions)
 
     if not files:
         raise AppError(status_code=400, error_code="NO_FILES", message="No files uploaded.")
@@ -236,47 +265,53 @@ async def generate_questions_async(
     if not isinstance(files, list):
         files = [files]
 
-    for file in files:
-        if not file or not file.filename:
-            continue
-        if not validate_file_extension(file.filename):
-            raise AppError(
-                status_code=400,
-                error_code="INVALID_FILE_TYPE",
-                message=f"File extension not allowed: {file.filename}"
-            )
-        file_path = await save_upload_file(file, "uploads")
-        saved_files.append(file_path)
+    try:
+        for file in files:
+            if not file or not file.filename:
+                continue
+            if not validate_file_extension(file.filename):
+                raise AppError(
+                    status_code=400,
+                    error_code="INVALID_FILE_TYPE",
+                    message=f"File extension not allowed: {file.filename}"
+                )
+            file_path = await save_upload_file(file, "uploads")
+            saved_files.append(file_path)
 
-    if not saved_files:
-        raise AppError(status_code=400, error_code="NO_VALID_FILES", message="No valid files saved.")
+        if not saved_files:
+            raise AppError(status_code=400, error_code="NO_VALID_FILES", message="No valid files saved.")
 
-    task_id = str(uuid.uuid4())
-    tasks_store[task_id] = {
-        "task_id": task_id,
-        "status": "queued",
-        "progress": 5,
-        "stage": "Task queued in background processing pipeline...",
-        "questions": [],
-        "error": None,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat()
-    }
+        task_id = str(uuid.uuid4())
+        tasks_store[task_id] = {
+            "task_id": task_id,
+            "status": "queued",
+            "progress": 5,
+            "stage": "Task queued in background processing pipeline...",
+            "questions": [],
+            "error": None,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
 
-    # Dispatch background worker
-    background_tasks.add_task(
-        run_async_generation_task,
-        task_id,
-        saved_files,
-        qtype,
-        difficulty,
-        num_questions,
-        class_id,
-        subject,
-        teacher_id,
-        blooms_level,
-        page_range
-    )
+        # Dispatch background worker
+        background_tasks.add_task(
+            run_async_generation_task,
+            task_id,
+            saved_files,
+            qtype,
+            difficulty,
+            num_questions,
+            class_id,
+            subject,
+            teacher_id,
+            blooms_level,
+            page_range,
+            caller_id,
+            mode
+        )
+    except Exception:
+        cleanup_files(saved_files)
+        raise
 
     return {
         "task_id": task_id,
@@ -302,6 +337,8 @@ async def get_task_status(task_id: str):
         "progress": task_info["progress"],
         "stage": task_info["stage"],
         "questions": task_info.get("questions", []),
+        "usage": task_info.get("usage"),
+        "limit_hit_warning": task_info.get("limit_hit_warning"),
         "error": task_info.get("error"),
         "created_at": task_info["created_at"],
         "updated_at": task_info["updated_at"]
