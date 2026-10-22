@@ -211,6 +211,7 @@ class ExportService:
         # Header Row
         writer.writerow([
             "Question Number",
+            "Education Level",
             "Class/Grade",
             "Subject",
             "Question Type",
@@ -240,7 +241,8 @@ class ExportService:
 
             writer.writerow([
                 idx,
-                q.get("class_id") or "Unassigned",
+                q.get("education_level") or "",
+                q.get("class_label") or q.get("class_id") or "Unassigned",
                 q.get("subject") or "General",
                 q_type.upper(),
                 q_text,

@@ -21,6 +21,8 @@ class QuestionUpdate(BaseModel):
     rationale: Optional[str] = None
     difficulty: Optional[str] = None
     class_id: Optional[str] = None
+    education_level: Optional[str] = None
+    class_label: Optional[str] = None
     subject: Optional[str] = None
 
 class QuestionResponse(BaseModel):
@@ -32,11 +34,14 @@ class QuestionResponse(BaseModel):
     rationale: Optional[str]
     qtype: str
     difficulty: str
-    class_id: Optional[str]
-    subject: Optional[str]
-    metadata: Optional[Dict[str, Any]]
-    created_at: Optional[str]
-    updated_at: Optional[str]
+    blooms_level: Optional[str] = "Understand"
+    class_id: Optional[str] = None
+    education_level: Optional[str] = None
+    class_label: Optional[str] = None
+    subject: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     
     class Config:
         json_encoders = {
@@ -231,7 +236,11 @@ async def get_questions(
     teacher_id: Optional[str] = Query(None, description="Filter by teacher ID who created the questions"),
     qtype: Optional[str] = Query(None, description="Filter by question type (mcq, true_false, short_answer)"),
     subject: Optional[str] = Query(None, description="Filter by subject (e.g., english, math, science)"),
-    class_id: Optional[str] = Query(None, description="Filter by class/grade level (e.g., 3, 4, 5)"),
+    class_id: Optional[str] = Query(None, description="Filter by class/grade level (e.g., 3, 4, 5, Grade 10)"),
+    education_level: Optional[str] = Query(None, description="Filter by standardized education level code (e.g. primary_1, phd)"),
+    stage: Optional[str] = Query(None, description="Filter by educational stage (early_years, primary, junior_secondary, senior_secondary, undergraduate, postgraduate, doctoral, professional)"),
+    min_level: Optional[str] = Query(None, description="Minimum level code for range query (e.g. primary_1)"),
+    max_level: Optional[str] = Query(None, description="Maximum level code for range query (e.g. primary_6)"),
     difficulty: Optional[str] = Query(None, description="Filter by difficulty level (easy, medium, hard)"),
     page: int = Query(1, ge=1, description="Page number for pagination (starts from 1)"),
     size: int = Query(10, ge=1, le=100, description="Number of questions per page (max 100)"),
@@ -245,31 +254,17 @@ async def get_questions(
     
     **Common Use Cases:**
     - Get all questions: `/api/questions`
+    - Get questions by education level: `/api/questions?education_level=primary_3`
+    - Get questions by stage: `/api/questions?stage=primary`
+    - Range queries: `/api/questions?min_level=primary_1&max_level=primary_6`
     - Get questions by teacher: `/api/questions?teacher_id=3`
     - Get questions by subject: `/api/questions?subject=english`
     - Get questions by class: `/api/questions?class_id=3`
-    - Get questions by difficulty: `/api/questions?difficulty=easy`
-    - Combine filters: `/api/questions?teacher_id=3&subject=english&class_id=3`
-    - Search questions: `/api/questions?search=hands`
-    
-    **Filter Parameters:**
-    - **teacher_id**: Questions created by specific teacher
-    - **qtype**: Question type - `mcq`, `true_false`, or `short_answer`
-    - **subject**: Subject area - `english`, `math`, `science`, etc.
-    - **class_id**: Target class/grade - `1`, `2`, `3`, `4`, `5`, `6`, etc.
-    - **difficulty**: Difficulty level - `easy`, `medium`, or `hard`
-    - **search**: Text search in question and answer content
-    - **page**: Pagination page number (default: 1)
-    - **size**: Results per page (default: 10, max: 100)
-    
-    **Response includes:**
-    - `questions`: Array of question objects
-    - `total`: Total number of questions matching filters
-    - `page`: Current page number
-    - `size`: Questions per page
-    - `pages`: Total number of pages
+    - Combine filters: `/api/questions?stage=primary&subject=english`
     """
     try:
+        from services.education import resolve_level, levels_by_stage, codes_in_range
+
         # Build query with filters
         stmt = select(Question)
         
@@ -283,8 +278,24 @@ async def get_questions(
         if subject:
             stmt = stmt.where(Question.subject.ilike(f"%{subject}%"))
         
-        if class_id:
-            stmt = stmt.where(Question.class_id == class_id)
+        if education_level:
+            res_lvl = resolve_level(education_level)
+            code = res_lvl.code if res_lvl else education_level
+            stmt = stmt.where(or_(Question.education_level == code, Question.class_id == education_level))
+        elif stage:
+            stage_codes = [l.code for l in levels_by_stage(stage)]
+            if stage_codes:
+                stmt = stmt.where(Question.education_level.in_(stage_codes))
+        elif min_level or max_level:
+            range_codes = codes_in_range(min_level, max_level)
+            if range_codes:
+                stmt = stmt.where(Question.education_level.in_(range_codes))
+        elif class_id:
+            res_lvl = resolve_level(class_id)
+            if res_lvl:
+                stmt = stmt.where(or_(Question.class_id == class_id, Question.education_level == res_lvl.code))
+            else:
+                stmt = stmt.where(Question.class_id == class_id)
         
         if difficulty:
             stmt = stmt.where(Question.difficulty == difficulty)

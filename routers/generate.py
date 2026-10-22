@@ -32,20 +32,23 @@ from fastapi import File
 @router.post("/inspect-pdf")
 async def inspect_pdf(file: UploadFile = File(...)):
     """
-    Inspect an uploaded PDF or PPTX presentation to extract total page/slide count and chapter/slide titles.
+    Inspect an uploaded PDF, PowerPoint, Word document, or text file to extract total page/slide count and chapter/heading titles.
     """
     if not file or not file.filename:
         raise AppError(status_code=400, error_code="NO_FILE", message="No file provided.")
     
     ext = get_file_extension(file.filename).lower()
-    if ext not in ['pdf', 'pptx', 'ppt']:
-        raise AppError(status_code=400, error_code="INVALID_FILE_TYPE", message="File must be a PDF or PowerPoint document.")
+    if ext not in ['pdf', 'pptx', 'ppt', 'docx', 'doc', 'txt']:
+        raise AppError(status_code=400, error_code="INVALID_FILE_TYPE", message="File must be a PDF, Word document, PowerPoint presentation, or text file.")
     
     saved_path = await save_upload_file(file, "uploads")
     try:
         if ext in ['pptx', 'ppt']:
             from services.pptx_service import inspect_pptx_slides
             return inspect_pptx_slides(saved_path)
+        elif ext in ['docx', 'doc', 'txt']:
+            from services.docx_service import inspect_docx_content
+            return inspect_docx_content(saved_path)
         
         res = pdf_service.extract_pdf_toc(saved_path)
         return res
@@ -59,7 +62,9 @@ class GenerateRequest(BaseModel):
     difficulty: str = Field(..., description="Difficulty level (e.g., 'easy', 'medium', 'hard')")
     teacher_id: Optional[str] = Field(None, description="Optional teacher ID")
     num_questions: int = Field(3, ge=1, le=100, description="Number of questions to generate (1-100)")
-    class_id: Optional[str] = Field(None, description="Class/grade level (e.g., 'Grade 5', 'Class 10')")
+    class_id: Optional[str] = Field(None, description="Class/grade level (deprecated, e.g., 'Grade 5', 'Class 10')")
+    education_level: Optional[str] = Field(None, description="Standard education level code (e.g., 'primary_1', 'sss_1', 'phd')")
+    class_label: Optional[str] = Field(None, description="Informal class room label (e.g. 'Class 5A')")
     subject: Optional[str] = Field(None, description="Subject of the questions (e.g., 'Math', 'Science')")
     page_range: Optional[str] = Field(None, description="Optional page range, e.g. '8-20'")
 
@@ -140,10 +145,10 @@ async def generate_from_files(
         # Process each file
         tasks = []
         for file_path in req.file_paths:
-            ext = get_file_extension(file_path)
+            ext = get_file_extension(file_path).lower()
             if ext in {"png", "jpg", "jpeg", "gif"}:
                 tasks.append(process_image(file_path))
-            elif ext == "pdf":
+            elif ext in {"pdf", "pptx", "ppt", "docx", "doc", "txt"}:
                 tasks.append(process_pdf(file_path, page_range=req.page_range))
         
         # Wait for all files to be processed
@@ -172,8 +177,15 @@ async def generate_from_files(
                 message="No text could be extracted from the provided files"
             )
         
+        # Resolve educational level and class label
+        from services.education import resolve_level_and_label
+        target_level, resolved_label = resolve_level_and_label(req.education_level or req.class_id)
+        effective_class_id = req.class_id or (target_level.label if target_level else None)
+        effective_level_code = target_level.code if target_level else None
+        effective_class_label = req.class_label or resolved_label or req.class_id
+
         # Generate questions
-        questions = await asyncio.to_thread(
+        raw_questions = await asyncio.to_thread(
             qgen_service.generate_questions_from_content,
             text=combined_text,
             refined_text="",
@@ -181,22 +193,36 @@ async def generate_from_files(
             qtype=req.qtype,
             difficulty=req.difficulty,
             num_questions=req.num_questions,
-            class_id=req.class_id,
-            subject=req.subject
+            class_id=effective_class_id,
+            subject=req.subject,
+            education_level=target_level
         )
         
+        # Parse JSON string if needed
+        questions = raw_questions
+        if isinstance(questions, str):
+            try:
+                questions = json.loads(questions)
+            except Exception:
+                import re
+                match = re.search(r'\[\s*\{.*\}\s*\]', questions, re.DOTALL)
+                questions = json.loads(match.group(0)) if match else []
+
         # Save questions to database
         response_questions = []
         for q in questions:
             db_question = Question(
                 teacher_id=req.teacher_id,
-                question_text=q["question"],
-                answer_text=q["answer"],
+                question_text=q.get("question", ""),
+                answer_text=q.get("answer", ""),
                 choices=json.dumps(q.get("choices", [])),
                 rationale=q.get("rationale", ""),
-                qtype=req.qtype,
-                difficulty=req.difficulty,
-                class_id=req.class_id,
+                qtype=q.get("qtype", req.qtype),
+                difficulty=q.get("difficulty", req.difficulty),
+                blooms_level=q.get("blooms_level", "Understand"),
+                class_id=effective_class_id,
+                education_level=effective_level_code,
+                class_label=effective_class_label,
                 subject=req.subject,
                 metadata_=json.dumps(q)
             )
@@ -210,11 +236,14 @@ async def generate_from_files(
                 "answer": db_question.answer_text,
                 "qtype": db_question.qtype,
                 "difficulty": db_question.difficulty,
+                "blooms_level": db_question.blooms_level,
                 "class_id": db_question.class_id,
+                "education_level": db_question.education_level,
+                "class_label": db_question.class_label,
                 "subject": db_question.subject
             }
             if db_question.choices:
-                question_data["choices"] = json.loads(db_question.choices)
+                question_data["choices"] = json.loads(db_question.choices) if isinstance(db_question.choices, str) else db_question.choices
             if db_question.rationale:
                 question_data["rationale"] = db_question.rationale
             response_questions.append(question_data)

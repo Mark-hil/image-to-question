@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import async_session_maker, get_db
 from models import Question
 from services.qgen_service import generate_questions_from_content
+from services.education import resolve_level_and_label
 from .generate import process_image, process_pdf
 from utils.file import ALLOWED_EXTENSIONS, save_upload_file, get_file_extension, cleanup_files
 from utils.exceptions import AppError
@@ -46,7 +47,9 @@ async def run_async_generation_task(
     blooms_level: str = "all",
     page_range: str = "",
     caller_id: Optional[CallerIdentity] = None,
-    mode: str = "exam"
+    mode: str = "exam",
+    education_level: Optional[str] = None,
+    class_label: Optional[str] = None
 ):
     """Background worker function executing vision extractions, LLM generation, and DB storage."""
     try:
@@ -60,7 +63,7 @@ async def run_async_generation_task(
         tasks = []
         for file_path in saved_files:
             ext = get_file_extension(file_path).lower()
-            if ext == 'pdf':
+            if ext in {'pdf', 'pptx', 'ppt', 'docx', 'doc', 'txt'}:
                 tasks.append(process_pdf(file_path, page_range=page_range))
             else:
                 tasks.append(process_image(file_path))
@@ -114,7 +117,8 @@ async def run_async_generation_task(
                 class_id=class_id,
                 subject=subject,
                 blooms_level=blooms_level,
-                mode=mode
+                mode=mode,
+                education_level=education_level
             )
 
             if isinstance(raw_questions, str):
@@ -142,6 +146,7 @@ async def run_async_generation_task(
         async with async_session_maker() as db:
             db_questions = []
             for q in all_questions:
+                q_level = q.get("education_level") or education_level
                 db_q = Question(
                     teacher_id=teacher_id,
                     question_text=q.get("question", "No question text"),
@@ -152,6 +157,8 @@ async def run_async_generation_task(
                     difficulty=q.get("difficulty") or (difficulty.split(",")[0] if difficulty else "medium"),
                     blooms_level=q.get("blooms_level", "Understand"),
                     class_id=class_id,
+                    education_level=q_level,
+                    class_label=class_label,
                     subject=subject,
                     metadata_=json.dumps({
                         "source_image": q.get("source_image", 0),
@@ -179,6 +186,8 @@ async def run_async_generation_task(
                     "difficulty": db_q.difficulty,
                     "blooms_level": db_q.blooms_level or "Understand",
                     "class_id": db_q.class_id,
+                    "education_level": db_q.education_level,
+                    "class_label": db_q.class_label,
                     "subject": db_q.subject,
                     "source_image": metadata.get("source_image", 0),
                     "source_file": metadata.get("source_file", "")
@@ -231,6 +240,10 @@ async def generate_questions_async(
     page_range_query: Optional[str] = Query(None, alias="page_range"),
     mode: Optional[str] = Form(None),
     mode_query: Optional[str] = Query(None, alias="mode"),
+    education_level: Optional[str] = Form(None),
+    education_level_query: Optional[str] = Query(None, alias="education_level"),
+    class_label: Optional[str] = Form(None),
+    class_label_query: Optional[str] = Query(None, alias="class_label"),
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
@@ -246,6 +259,10 @@ async def generate_questions_async(
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
     mode = (mode or mode_query or "exam").lower()
+    education_level = education_level or education_level_query
+    class_label = class_label or class_label_query
+    resolved_level, resolved_label = resolve_level_and_label(education_level, class_id, class_label)
+    final_education_level = resolved_level.code if resolved_level else None
 
     # Resolve caller identity and enforce usage limits & quotas
     caller_id = await resolve_and_enforce_identity(
@@ -307,7 +324,9 @@ async def generate_questions_async(
             blooms_level,
             page_range,
             caller_id,
-            mode
+            mode,
+            education_level=final_education_level,
+            class_label=resolved_label
         )
     except Exception:
         cleanup_files(saved_files)

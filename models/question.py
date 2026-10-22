@@ -20,7 +20,9 @@ class Question(Base):
     qtype = Column(String(20), nullable=False, index=True, comment="Type of question: 'mcq', 'true_false', 'short_answer'")
     difficulty = Column(String(20), nullable=False, index=True, comment="Difficulty level: 'easy', 'medium', 'hard'")
     blooms_level = Column(String(30), nullable=True, default='Understand', index=True, comment="Bloom's taxonomy level: 'Remember', 'Understand', 'Apply', 'Analyze', 'Evaluate', 'Create'")
-    class_id = Column(String(100), nullable=True, index=True, comment="Target class/grade level")
+    class_id = Column(String(100), nullable=True, index=True, comment="Target class/grade level (deprecated, use education_level)")
+    education_level = Column(String(32), nullable=True, index=True, comment="Standard education level code (e.g. primary_1, phd)")
+    class_label = Column(String(100), nullable=True, comment="Informal class room or section label (e.g. Class 5A)")
     subject = Column(String(100), nullable=True, index=True, comment="Subject area of the question")
     metadata_ = Column('metadata', JSON_TYPE, nullable=True, comment="Additional metadata in JSON format")
     created_at = Column(DateTime(timezone=True), 
@@ -39,6 +41,7 @@ class Question(Base):
         Index('idx_question_teacher_type', 'teacher_id', 'qtype'),
         Index('idx_question_subject_difficulty', 'subject', 'difficulty'),
         Index('idx_question_blooms_level', 'blooms_level'),
+        Index('idx_question_education_level', 'education_level'),
         # GIN index for JSONB columns to enable efficient querying
         Index('idx_metadata_gin', metadata_, postgresql_using='gin'),
         Index('idx_choices_gin', choices, postgresql_using='gin'),
@@ -57,6 +60,8 @@ class Question(Base):
             'difficulty': self.difficulty,
             'blooms_level': self.blooms_level or 'Understand',
             'class_id': self.class_id,
+            'education_level': self.education_level,
+            'class_label': self.class_label,
             'subject': self.subject,
             'metadata': self.metadata_,  # Using the actual column name here
             'created_at': self.created_at.isoformat() if self.created_at else None,

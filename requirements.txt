@@ -22,4 +22,6 @@ pyjwt>=2.0.0
 passlib>=1.7.4
 bcrypt>=4.0.0
 python-docx>=1.1.0
-
+python-pptx>=1.0.0
+aiosqlite>=0.17.0
+sqlalchemy-utils>=0.41.0

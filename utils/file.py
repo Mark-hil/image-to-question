@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
 ALLOWED_PDF_EXTENSIONS = {"pdf"}
 ALLOWED_PPTX_EXTENSIONS = {"pptx", "ppt"}
-ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS.union(ALLOWED_PDF_EXTENSIONS).union(ALLOWED_PPTX_EXTENSIONS)
+ALLOWED_DOCX_EXTENSIONS = {"docx", "doc", "txt"}
+ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS.union(ALLOWED_PDF_EXTENSIONS).union(ALLOWED_PPTX_EXTENSIONS).union(ALLOWED_DOCX_EXTENSIONS)
 
 def get_file_extension(filename: str) -> str:
     """Extract and return the file extension in lowercase"""
@@ -33,6 +34,10 @@ def is_pdf(filename: str) -> bool:
 def is_pptx(filename: str) -> bool:
     """Check if the file is a PowerPoint presentation based on its extension"""
     return get_file_extension(filename) in ALLOWED_PPTX_EXTENSIONS
+
+def is_docx(filename: str) -> bool:
+    """Check if the file is a Word document or text file based on its extension"""
+    return get_file_extension(filename) in ALLOWED_DOCX_EXTENSIONS
 
 def cleanup_file(file_path: Optional[str]) -> bool:
     """
@@ -100,11 +105,11 @@ async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_s
             error_code="FILE_TOO_LARGE",
             message=f"Image file is too large. Maximum size is {max_image_size // (1024 * 1024)}MB"
         )
-    elif is_pdf(upload_file.filename) and file_size > max_pdf_size:
+    elif (is_pdf(upload_file.filename) or is_pptx(upload_file.filename) or is_docx(upload_file.filename)) and file_size > max_pdf_size:
         raise AppError(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             error_code="FILE_TOO_LARGE",
-            message=f"PDF file is too large. Maximum size is {max_pdf_size // (1024 * 1024)}MB"
+            message=f"Document file is too large. Maximum size is {max_pdf_size // (1024 * 1024)}MB"
         )
         
     # Reset file pointer after reading

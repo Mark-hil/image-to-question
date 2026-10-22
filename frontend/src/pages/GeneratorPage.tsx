@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Dropzone } from '../components/Dropzone';
 import { QuestionCard } from '../components/QuestionCard';
 import { ExportModal } from '../components/ExportModal';
+import { EducationLevelSelector } from '../components/EducationLevelSelector';
 import { api } from '../services/api';
 import type { QuestionData } from '../services/api';
 import { Sparkles, Sliders, Save, Download, AlertCircle, BookOpen, Plus, Minus, CheckCircle, Check, Loader2, Zap, Brain, Target, Layers, Lock, GraduationCap } from 'lucide-react';
@@ -83,7 +84,10 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
   const [mode, setMode] = useState<'exam' | 'practice'>('exam');
   const [numQuestions, setNumQuestions] = useState<number>(10);
   const [subject, setSubject] = useState<string>('Biology');
-  const [classId, setClassId] = useState<string>('Grade 10');
+  const [educationLevel, setEducationLevel] = useState<string>('');
+  const [classLabel, setClassLabel] = useState<string>('');
+  const [classId, setClassId] = useState<string>('');
+  const [levelError, setLevelError] = useState<boolean>(false);
   const [quizTitle, setQuizTitle] = useState<string>('My Quiz Bank');
   const [pageRange, setPageRange] = useState<string>('');
   const [detectedChapters, setDetectedChapters] = useState<Array<{ title: string; range: string; start_page: number; end_page: number }>>([]);
@@ -135,7 +139,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
 
     const docFile = files.find(f => {
       const name = f.name.toLowerCase();
-      return name.endsWith('.pdf') || name.endsWith('.pptx') || name.endsWith('.ppt');
+      return name.endsWith('.pdf') || name.endsWith('.pptx') || name.endsWith('.ppt') || name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.txt');
     });
 
     if (docFile) {
@@ -183,7 +187,12 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         if (res.status === 'completed') {
           completed = true;
           if (res.questions && res.questions.length > 0) {
-            const formatted = res.questions.map(q => ({ ...q, class_id: q.class_id || classId }));
+            const formatted = res.questions.map(q => ({
+              ...q,
+              class_id: q.class_id || classLabel || classId,
+              education_level: q.education_level || educationLevel,
+              class_label: q.class_label || classLabel,
+            }));
             setQuestions(formatted);
             if (selectedFiles.length > 0) {
               setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
@@ -225,6 +234,16 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
       return;
     }
 
+    if (!educationLevel || !educationLevel.trim()) {
+      setLevelError(true);
+      setError('Target Grade / Education Level is a required field. Please select an education level.');
+      const el = document.getElementById('education-level-section');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+
     const effectiveNumQuestions = user ? numQuestions : Math.min(5, numQuestions);
 
     setLoading(true);
@@ -246,7 +265,10 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           undefined,
           bloomsParam,
           pageRange,
-          mode
+          mode,
+          classLabel || classId,
+          educationLevel,
+          classLabel
         );
         pollTaskStatus(result.task_id);
       } catch (err: any) {
@@ -277,10 +299,12 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
           effectiveNumQuestions,
           subject,
           undefined,
-          classId,
+          classLabel || classId,
           bloomsParam,
           pageRange,
-          mode
+          mode,
+          educationLevel,
+          classLabel
         );
 
         clearTimeout(progTimer1);
@@ -290,7 +314,12 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
         setProgressStage('Generation Complete!');
         setProgressStatus('completed');
 
-        const formatted = generated.map(q => ({ ...q, class_id: q.class_id || classId }));
+        const formatted = generated.map(q => ({
+          ...q,
+          class_id: q.class_id || classLabel || classId,
+          education_level: q.education_level || educationLevel,
+          class_label: q.class_label || classLabel,
+        }));
         setQuestions(formatted);
         if (selectedFiles.length > 0) {
           setQuizTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, "") + " Quiz");
@@ -331,7 +360,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
 
     try {
       const sourceName = selectedFiles.map(f => f.name).join(', ');
-      const saved = await api.saveQuiz(token, quizTitle, subject, sourceName, questions, classId);
+      const saved = await api.saveQuiz(token, quizTitle, subject, sourceName, questions, classLabel || classId, educationLevel, classLabel);
       setSavedQuizId(saved.id);
       setSaveSuccess(true);
     } catch (err: any) {
@@ -695,8 +724,8 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
             </div>
           </div>
 
-          {/* Subject, Class & PDF Page Range inputs */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '14px', marginBottom: '20px' }}>
+          {/* Subject & PDF Page Range inputs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '16px' }}>
             <div className="form-group">
               <label className="form-label">Subject Tag / Topic</label>
               <input
@@ -704,17 +733,7 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 className="input-field"
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                placeholder="e.g. Physics, Biology"
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Class Tag / Grade</label>
-              <input
-                type="text"
-                className="input-field"
-                value={classId}
-                onChange={(e) => setClassId(e.target.value)}
-                placeholder="e.g. Grade 10, Class 5A"
+                placeholder="e.g. Physics, Biology, History"
               />
             </div>
             <div className="form-group">
@@ -736,6 +755,28 @@ export const GeneratorPage: React.FC<GeneratorPageProps> = ({
                 }}
               />
             </div>
+          </div>
+
+          {/* Education Level & Target Grade Selector (Primary 1 to PhD) */}
+          <div id="education-level-section" style={{ marginBottom: '22px' }}>
+            <EducationLevelSelector
+              selectedLevelCode={educationLevel}
+              classLabel={classLabel}
+              hasError={levelError}
+              onLevelChange={(code, lvl) => {
+                setEducationLevel(code);
+                setLevelError(false);
+                setError(null);
+                if (lvl) {
+                  setClassLabel(lvl.label);
+                  setClassId(lvl.label);
+                }
+              }}
+              onClassLabelChange={(lbl) => {
+                setClassLabel(lbl);
+                setClassId(lbl);
+              }}
+            />
           </div>
 
           {/* Detected PDF Chapter Pills (Option C - Hybrid TOC Extraction) */}

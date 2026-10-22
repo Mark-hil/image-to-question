@@ -249,7 +249,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ token, onOpenAuth }) =
 
                       <span className="badge badge-indigo">{quiz.subject || 'General'}</span>
 
-                      {quiz.class_id && (
+                      {(quiz.class_label || quiz.education_level || quiz.class_id) && (
                         <span
                           className="badge"
                           style={{
@@ -259,7 +259,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ token, onOpenAuth }) =
                             fontWeight: 700
                           }}
                         >
-                          🏫 {quiz.class_id}
+                          🏫 {quiz.class_label || quiz.class_id || quiz.education_level}
                         </span>
                       )}
                     </div>

@@ -68,20 +68,74 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
           <span className="badge badge-emerald">{(question.difficulty || 'Medium').toUpperCase()}</span>
 
-          {question.class_id && (
-            <span
-              className="badge"
-              style={{
-                background: 'rgba(236, 72, 153, 0.15)',
-                color: '#F472B6',
-                border: '1px solid rgba(236, 72, 153, 0.3)',
-                fontWeight: 700
-              }}
-              title={`Target Class/Grade: ${question.class_id}`}
-            >
-              🏫 {question.class_id}
-            </span>
-          )}
+          {(question.class_label || question.education_level || question.class_id) && (() => {
+            const label = question.class_label || question.class_id || question.education_level;
+            const eduCode = question.education_level || '';
+            let icon = '🏫';
+            let color = '#F472B6';
+            let bg = 'rgba(236, 72, 153, 0.15)';
+            let border = 'rgba(236, 72, 153, 0.3)';
+
+            if (eduCode.startsWith('kg_')) {
+              icon = '🧸';
+              color = '#F472B6';
+              bg = 'rgba(244, 114, 182, 0.15)';
+              border = 'rgba(244, 114, 182, 0.3)';
+            } else if (eduCode.startsWith('primary_')) {
+              icon = '🎒';
+              color = '#34D399';
+              bg = 'rgba(52, 211, 153, 0.15)';
+              border = 'rgba(52, 211, 153, 0.3)';
+            } else if (eduCode.startsWith('jss_')) {
+              icon = '📘';
+              color = '#38BDF8';
+              bg = 'rgba(56, 189, 248, 0.15)';
+              border = 'rgba(56, 189, 248, 0.3)';
+            } else if (eduCode.startsWith('sss_')) {
+              icon = '📐';
+              color = '#818CF8';
+              bg = 'rgba(129, 140, 248, 0.15)';
+              border = 'rgba(129, 140, 248, 0.3)';
+            } else if (eduCode.startsWith('ug_')) {
+              icon = '🏛️';
+              color = '#A78BFA';
+              bg = 'rgba(167, 139, 250, 0.15)';
+              border = 'rgba(167, 139, 250, 0.3)';
+            } else if (eduCode === 'masters' || eduCode === 'pg_diploma') {
+              icon = '📜';
+              color = '#C084FC';
+              bg = 'rgba(192, 132, 252, 0.15)';
+              border = 'rgba(192, 132, 252, 0.3)';
+            } else if (eduCode === 'phd' || eduCode === 'postdoc') {
+              icon = '🎓';
+              color = '#F43F5E';
+              bg = 'rgba(244, 63, 94, 0.15)';
+              border = 'rgba(244, 63, 94, 0.3)';
+            } else if (eduCode === 'professional') {
+              icon = '💼';
+              color = '#FBBF24';
+              bg = 'rgba(251, 191, 36, 0.15)';
+              border = 'rgba(251, 191, 36, 0.3)';
+            }
+
+            return (
+              <span
+                className="badge"
+                style={{
+                  background: bg,
+                  color: color,
+                  border: `1px solid ${border}`,
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+                title={`Target Education Level / Class: ${label}`}
+              >
+                <span>{icon}</span> {label}
+              </span>
+            );
+          })()}
 
           {/* Bloom's Taxonomy Badge */}
           {(() => {

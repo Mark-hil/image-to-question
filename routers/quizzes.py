@@ -10,6 +10,7 @@ from database import get_db
 from models.user import User
 from models.quiz import Quiz, QuizQuestion
 from utils.auth import get_current_user
+from services.education import resolve_level_and_label, levels_by_stage, Stage
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,15 @@ class CreateQuestionInput(BaseModel):
     difficulty: Optional[str] = "medium"
     blooms_level: Optional[str] = "Understand"
     class_id: Optional[str] = None
+    education_level: Optional[str] = None
+    class_label: Optional[str] = None
 
 class CreateQuizRequest(BaseModel):
     title: str
     subject: Optional[str] = "General"
     class_id: Optional[str] = None
+    education_level: Optional[str] = None
+    class_label: Optional[str] = None
     original_file_name: Optional[str] = None
     questions: List[CreateQuestionInput]
 
@@ -42,6 +47,8 @@ class UpdateQuestionInput(BaseModel):
     difficulty: Optional[str] = None
     blooms_level: Optional[str] = None
     class_id: Optional[str] = None
+    education_level: Optional[str] = None
+    class_label: Optional[str] = None
 
 class BulkDeleteRequest(BaseModel):
     quiz_ids: List[str]
@@ -63,11 +70,16 @@ async def create_quiz(
             detail="Quiz must contain at least 1 question."
         )
 
+    quiz_level, quiz_label = resolve_level_and_label(body.education_level, body.class_id, body.class_label)
+    final_quiz_level = quiz_level.code if quiz_level else None
+
     new_quiz = Quiz(
         user_id=current_user.id,
         title=body.title,
         subject=body.subject or "General",
         class_id=body.class_id,
+        education_level=final_quiz_level,
+        class_label=quiz_label,
         original_file_name=body.original_file_name
     )
     db.add(new_quiz)
@@ -79,6 +91,14 @@ async def create_quiz(
         a_text = item.answer_text or item.answer
         if not q_text:
             continue
+
+        q_level, q_label = resolve_level_and_label(
+            item.education_level or body.education_level,
+            item.class_id or body.class_id,
+            item.class_label or body.class_label
+        )
+        final_q_level = q_level.code if q_level else final_quiz_level
+
         q = QuizQuestion(
             quiz_id=new_quiz.id,
             question_text=q_text,
@@ -88,7 +108,9 @@ async def create_quiz(
             qtype=item.qtype or "mcq",
             difficulty=item.difficulty or "medium",
             blooms_level=item.blooms_level or "Understand",
-            class_id=item.class_id or body.class_id
+            class_id=item.class_id or body.class_id,
+            education_level=final_q_level,
+            class_label=q_label or quiz_label
         )
         db.add(q)
         quiz_questions.append(q)
@@ -105,16 +127,30 @@ async def create_quiz(
 
 @router.get("", status_code=status.HTTP_200_OK)
 async def list_quizzes(
+    education_level: Optional[str] = None,
+    stage: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """List all saved quiz banks for current user."""
-    res = await db.execute(
+    """List all saved quiz banks for current user, optionally filtered by education level or stage."""
+    query = (
         select(Quiz)
         .options(selectinload(Quiz.questions))
         .where(Quiz.user_id == current_user.id)
-        .order_by(Quiz.created_at.desc())
     )
+
+    if education_level:
+        query = query.where(Quiz.education_level == education_level)
+    elif stage:
+        try:
+            stage_enum = Stage(stage.lower())
+            stage_codes = [lvl.code for lvl in levels_by_stage(stage_enum)]
+            query = query.where(Quiz.education_level.in_(stage_codes))
+        except ValueError:
+            pass
+
+    query = query.order_by(Quiz.created_at.desc())
+    res = await db.execute(query)
     quizzes = res.scalars().all()
     return {"quizzes": [q.to_dict(include_questions=True) for q in quizzes]}
 
@@ -169,6 +205,16 @@ async def update_question(
         q.blooms_level = body.blooms_level
     if body.class_id is not None:
         q.class_id = body.class_id
+
+    if body.education_level is not None or body.class_id is not None or body.class_label is not None:
+        target_edu = body.education_level if body.education_level is not None else q.education_level
+        target_cid = body.class_id if body.class_id is not None else q.class_id
+        target_clab = body.class_label if body.class_label is not None else q.class_label
+        resolved_l, resolved_lab = resolve_level_and_label(target_edu, target_cid, target_clab)
+        if resolved_l:
+            q.education_level = resolved_l.code
+        if resolved_lab:
+            q.class_label = resolved_lab
 
     await db.commit()
     await db.refresh(q)

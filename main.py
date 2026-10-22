@@ -30,7 +30,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Import after environment setup
 from database import engine, Base, init_db
-from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes, tasks
+from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes, tasks, education_levels
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -247,6 +247,11 @@ app.include_router(
     tasks.router,
     prefix="/api/tasks",
     tags=["Async Task Pipeline"]
+)
+app.include_router(
+    education_levels.router,
+    prefix="/api",
+    tags=["Education Levels"]
 )
 
 # Health check endpoint

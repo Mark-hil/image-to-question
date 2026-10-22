@@ -120,6 +120,10 @@ async def upload_and_generate(
     num_questions: Optional[int] = Form(None),
     num_questions_query: Optional[int] = Query(None, alias="num_questions"),
     class_id: Optional[str] = Form(None),
+    education_level: Optional[str] = Form(None),
+    education_level_query: Optional[str] = Query(None, alias="education_level"),
+    class_label: Optional[str] = Form(None),
+    class_label_query: Optional[str] = Query(None, alias="class_label"),
     subject: Optional[str] = Form(None),
     subject_query: Optional[str] = Query(None, alias="subject"),
     page_range: Optional[str] = Form(None),
@@ -141,6 +145,15 @@ async def upload_and_generate(
     subject = subject or subject_query or "General"
     page_range = page_range or page_range_query or ""
     mode = (mode or mode_query or "exam").lower()
+    education_level = education_level or education_level_query
+    class_label = class_label or class_label_query
+
+    # Resolve educational level and label
+    from services.education import resolve_level_and_label
+    target_level, resolved_label = resolve_level_and_label(education_level or class_id)
+    effective_class_id = class_id or (target_level.label if target_level else None)
+    effective_level_code = target_level.code if target_level else None
+    effective_class_label = class_label or resolved_label or class_id
 
     # Resolve caller identity and enforce usage limits & quotas
     caller_id = await resolve_and_enforce_identity(
@@ -159,7 +172,9 @@ async def upload_and_generate(
         "difficulty": difficulty,
         "blooms_level": blooms_level,
         "num_questions": num_questions,
-        "class_id": class_id,
+        "class_id": effective_class_id,
+        "education_level": effective_level_code,
+        "class_label": effective_class_label,
         "subject": subject,
         "mode": mode,
         "page_range": page_range,
@@ -225,7 +240,7 @@ async def upload_and_generate(
                 
                 # Create processing task based on file type
                 ext = get_file_extension(file_path).lower()
-                if ext == 'pdf':
+                if ext in {'pdf', 'pptx', 'ppt', 'docx', 'doc', 'txt'}:
                     task = asyncio.create_task(process_pdf(file_path, page_range=page_range))
                 else:
                     task = asyncio.create_task(process_image(file_path))
@@ -366,10 +381,11 @@ async def upload_and_generate(
                     qtype=qtype,
                     difficulty=difficulty,
                     num_questions=questions_per_image,
-                    class_id=class_id,
+                    class_id=effective_class_id,
                     subject=subject,
                     blooms_level=blooms_level,
-                    mode=mode
+                    mode=mode,
+                    education_level=target_level
                 )
                 
                 # Parse JSON string if needed
@@ -458,7 +474,9 @@ async def upload_and_generate(
                         qtype=q.get("qtype") or (qtype.split(",")[0] if qtype else "mcq"),
                         difficulty=q.get("difficulty") or (difficulty.split(",")[0] if difficulty else "medium"),
                         blooms_level=q.get("blooms_level", "Understand"),
-                        class_id=class_id,
+                        class_id=effective_class_id,
+                        education_level=effective_level_code,
+                        class_label=effective_class_label,
                         subject=subject,
                         metadata_=json.dumps({
                             "source_image": q.get("source_image", 0),
@@ -490,6 +508,8 @@ async def upload_and_generate(
                         "difficulty": q.difficulty,
                         "blooms_level": q.blooms_level or "Understand",
                         "class_id": q.class_id,
+                        "education_level": q.education_level,
+                        "class_label": q.class_label,
                         "subject": q.subject,
                         "source_image": metadata.get("source_image", 0),
                         "source_file": metadata.get("source_file", ""),

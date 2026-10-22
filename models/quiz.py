@@ -17,7 +17,9 @@ class Quiz(Base):
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False, comment="Title or topic of the quiz bank")
     subject = Column(String(100), nullable=True, comment="Subject area e.g. Mathematics, Biology")
-    class_id = Column(String(100), nullable=True, comment="Class or grade level e.g. Grade 10, Class 5A")
+    class_id = Column(String(100), nullable=True, comment="Class or grade level e.g. Grade 10, Class 5A (deprecated, use education_level)")
+    education_level = Column(String(32), nullable=True, index=True, comment="Standard education level code e.g. primary_1, phd")
+    class_label = Column(String(100), nullable=True, comment="Class room or section label e.g. Class 5A")
     original_file_name = Column(String(255), nullable=True, comment="Name of uploaded source file")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -32,6 +34,8 @@ class Quiz(Base):
             "title": self.title,
             "subject": self.subject,
             "class_id": self.class_id,
+            "education_level": self.education_level,
+            "class_label": self.class_label,
             "original_file_name": self.original_file_name,
             "question_count": len(self.questions) if self.questions else 0,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -54,7 +58,9 @@ class QuizQuestion(Base):
     qtype = Column(String(20), nullable=False, default="mcq")
     difficulty = Column(String(20), nullable=False, default="medium")
     blooms_level = Column(String(30), nullable=True, default="Understand")
-    class_id = Column(String(100), nullable=True, comment="Class or grade level")
+    class_id = Column(String(100), nullable=True, comment="Class or grade level (deprecated)")
+    education_level = Column(String(32), nullable=True, index=True, comment="Standard education level code")
+    class_label = Column(String(100), nullable=True, comment="Informal class room label")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     quiz = relationship("Quiz", back_populates="questions")
@@ -74,6 +80,8 @@ class QuizQuestion(Base):
             "difficulty": self.difficulty,
             "blooms_level": self.blooms_level or "Understand",
             "class_id": self.class_id,
+            "education_level": self.education_level,
+            "class_label": self.class_label,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 

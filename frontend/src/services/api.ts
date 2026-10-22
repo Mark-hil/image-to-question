@@ -1,5 +1,7 @@
 const API_BASE_URL = "http://localhost:8000/api";
 
+import type { EducationCatalogResponse, LevelResolveResponse } from '../types/education';
+
 export interface QuestionData {
   id?: string;
   question_text?: string;
@@ -12,6 +14,8 @@ export interface QuestionData {
   difficulty?: string;
   blooms_level?: string;
   class_id?: string;
+  education_level?: string;
+  class_label?: string;
   subject?: string;
 }
 
@@ -20,13 +24,36 @@ export interface QuizData {
   title: string;
   subject: string;
   class_id?: string;
+  education_level?: string;
+  class_label?: string;
   original_file_name?: string;
   question_count: number;
   created_at: string;
   questions?: QuestionData[];
 }
 
+let educationCatalogCache: EducationCatalogResponse | null = null;
+
 export const api = {
+  // Education Levels Catalog
+  async getEducationLevels(): Promise<EducationCatalogResponse> {
+    if (educationCatalogCache) {
+      return educationCatalogCache;
+    }
+    const res = await fetch(`${API_BASE_URL}/education-levels`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to fetch education levels");
+    educationCatalogCache = data as EducationCatalogResponse;
+    return educationCatalogCache;
+  },
+
+  async resolveEducationLevel(query: string): Promise<LevelResolveResponse> {
+    const res = await fetch(`${API_BASE_URL}/education-levels/resolve?query=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to resolve education level");
+    return data as LevelResolveResponse;
+  },
+
   // Auth
   async register(email: string, password: string, fullName?: string) {
     const res = await fetch(`${API_BASE_URL}/auth/register`, {
@@ -70,7 +97,9 @@ export const api = {
     classId?: string,
     bloomsLevel: string = "all",
     pageRange: string = "",
-    mode: string = "exam"
+    mode: string = "exam",
+    educationLevel?: string,
+    classLabel?: string
   ) {
     const formData = new FormData();
     const fileList = Array.isArray(files) ? files : [files];
@@ -85,6 +114,8 @@ export const api = {
     formData.append("mode", mode);
     if (pageRange) formData.append("page_range", pageRange);
     if (classId) formData.append("class_id", classId);
+    if (educationLevel) formData.append("education_level", educationLevel);
+    if (classLabel) formData.append("class_label", classLabel);
 
     const headers: Record<string, string> = {};
     if (apiKey) {
@@ -104,6 +135,9 @@ export const api = {
       mode: mode || "exam",
     };
     if (pageRange) queryParamsObj.page_range = pageRange;
+    if (classId) queryParamsObj.class_id = classId;
+    if (educationLevel) queryParamsObj.education_level = educationLevel;
+    if (classLabel) queryParamsObj.class_label = classLabel;
 
     const queryParams = new URLSearchParams(queryParamsObj).toString();
 
@@ -127,7 +161,9 @@ export const api = {
     subject: string,
     originalFileName: string | undefined,
     questions: QuestionData[],
-    classId?: string
+    classId?: string,
+    educationLevel?: string,
+    classLabel?: string
   ) {
     const normalizedQuestions = questions.map((q) => ({
       question_text: q.question_text || q.question || '',
@@ -138,6 +174,8 @@ export const api = {
       difficulty: q.difficulty || 'medium',
       blooms_level: q.blooms_level || 'Understand',
       class_id: q.class_id || classId,
+      education_level: q.education_level || educationLevel,
+      class_label: q.class_label || classLabel,
     }));
 
     const res = await fetch(`${API_BASE_URL}/quizzes`, {
@@ -150,6 +188,8 @@ export const api = {
         title,
         subject,
         class_id: classId,
+        education_level: educationLevel,
+        class_label: classLabel,
         original_file_name: originalFileName,
         questions: normalizedQuestions,
       }),
@@ -159,8 +199,15 @@ export const api = {
     return data.quiz as QuizData;
   },
 
-  async listQuizzes(token: string) {
-    const res = await fetch(`${API_BASE_URL}/quizzes`, {
+  async listQuizzes(token: string, filter?: { educationLevel?: string; stage?: string }) {
+    let url = `${API_BASE_URL}/quizzes`;
+    const params = new URLSearchParams();
+    if (filter?.educationLevel) params.append("education_level", filter.educationLevel);
+    if (filter?.stage) params.append("stage", filter.stage);
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+
+    const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json();
@@ -379,7 +426,10 @@ export const api = {
     apiKey?: string,
     bloomsLevel: string = "all",
     pageRange: string = "",
-    mode: string = "exam"
+    mode: string = "exam",
+    classId?: string,
+    educationLevel?: string,
+    classLabel?: string
   ): Promise<{ task_id: string; status: string; progress: number; stage: string }> {
     const formData = new FormData();
     const fileList = Array.isArray(files) ? files : [files];
@@ -393,6 +443,9 @@ export const api = {
     formData.append("subject", subject);
     formData.append("mode", mode);
     if (pageRange) formData.append("page_range", pageRange);
+    if (classId) formData.append("class_id", classId);
+    if (educationLevel) formData.append("education_level", educationLevel);
+    if (classLabel) formData.append("class_label", classLabel);
 
     const headers: Record<string, string> = {};
     if (apiKey) {
@@ -412,6 +465,9 @@ export const api = {
       mode: mode || "exam",
     };
     if (pageRange) queryParamsObj.page_range = pageRange;
+    if (classId) queryParamsObj.class_id = classId;
+    if (educationLevel) queryParamsObj.education_level = educationLevel;
+    if (classLabel) queryParamsObj.class_label = classLabel;
 
     const queryParams = new URLSearchParams(queryParamsObj).toString();
 

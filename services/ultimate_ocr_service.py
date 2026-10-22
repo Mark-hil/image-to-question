@@ -639,6 +639,16 @@ async def extract_text_from_path(file_path: str, page_range: Optional[str] = Non
             "confidence": "high" if cleaned_text else "low",
             "full_text": cleaned_text
         }
+    elif file_ext in ['.docx', '.doc', '.txt']:
+        from services.docx_service import extract_docx_content
+        res = extract_docx_content(file_path, page_range=page_range)
+        cleaned_text = _ultimate_ocr_service.ultimate_text_correction(res.get("text", ""))
+        return {
+            "text": cleaned_text,
+            "description": f"Extracted text from {os.path.basename(file_path)} (pages {res.get('page_range_used', '')})",
+            "confidence": "high" if cleaned_text else "low",
+            "full_text": cleaned_text
+        }
     else:
         return await _ultimate_ocr_service.extract_text_from_image(file_path)
 

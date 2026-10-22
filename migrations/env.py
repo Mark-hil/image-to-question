@@ -13,8 +13,11 @@ from models import Base  # Import your Base from models
 from database import DATABASE_URL  # Import your database URL
 
 # Create a synchronous version of DATABASE_URL for migrations
-# Convert asyncpg back to regular postgresql for migrations
-SYNC_DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+SYNC_DATABASE_URL = (
+    DATABASE_URL
+    .replace("postgresql+asyncpg://", "postgresql://")
+    .replace("sqlite+aiosqlite:///", "sqlite:///")
+)
 
 
 # this is the Alembic Config object, which provides

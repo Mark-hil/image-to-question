@@ -1,9 +1,16 @@
 import os
 import random
-from typing import Optional, List
+from typing import Optional, List, Union
 from config import settings
 from groq import Groq
 import json
+from services.education import (
+    resolve_level,
+    get_level,
+    get_prompt_profile,
+    DEFAULT_LEVEL_CODE,
+    EducationLevel,
+)
 
 # Initialize Groq client
 groq_client = Groq(api_key=settings.GROQ_API_KEY)
@@ -68,7 +75,8 @@ def build_prompt(
     mode: str = "exam",
     chunk_index: int = 0,
     total_chunks: int = 1,
-    variation_seed: Optional[int] = None
+    variation_seed: Optional[int] = None,
+    education_level: Optional[Union[str, EducationLevel]] = None
 ) -> str:
     """
     Build a prompt for question generation using Groq.
@@ -87,11 +95,28 @@ def build_prompt(
         chunk_index: Current batch window index
         total_chunks: Total batches across the document
         variation_seed: Optional seed for cognitive angle rotation
+        education_level: Optional EducationLevel object or canonical code / alias string
     """
-    # Add class and subject context to the prompt
+    # Resolve target educational level (Primary 1 through PhD)
+    target_level: Optional[EducationLevel] = None
+    if isinstance(education_level, EducationLevel):
+        target_level = education_level
+    elif education_level:
+        target_level = resolve_level(str(education_level))
+    elif class_id:
+        target_level = resolve_level(str(class_id))
+    
+    if target_level is None:
+        target_level = get_level(DEFAULT_LEVEL_CODE)
+
+    profile = get_prompt_profile(target_level)
+
+    # Add class, education level, and subject context to the prompt
     context_parts = []
     if class_id:
         context_parts.append(f"Class/Grade: {class_id}")
+    if target_level:
+        context_parts.append(f"Target Educational Level: {target_level.label} (Code: {target_level.code}, Stage: {target_level.stage.value})")
     if subject:
         context_parts.append(f"Subject: {subject}")
     
@@ -154,7 +179,10 @@ MANDATORY BLOOM'S TAXONOMY SPECIFICATION:
     seed_idx = variation_seed if variation_seed is not None else random.randint(0, len(FOCUS_ANGLES) - 1)
     focus_angle = FOCUS_ANGLES[seed_idx % len(FOCUS_ANGLES)]
 
-    # Difficulty instructions mapping
+    # Pedagogical instruction block from target level profile
+    pedagogy_block = profile.render_instruction_block(target_level, selected_diffs)
+
+    # Difficulty instructions mapping for reference
     difficulty_instructions = {
         'easy': "Easy: Use simple language and focus on basic concepts. Questions test recall and foundational understanding.",
         'medium': "Medium: Include analytical depth. Test application and comprehension of concepts.",
@@ -163,12 +191,13 @@ MANDATORY BLOOM'S TAXONOMY SPECIFICATION:
     diff_text = " / ".join([difficulty_instructions.get(d, d.capitalize()) for d in selected_diffs])
 
     # Question format rules and examples
+    max_c = target_level.max_choices
     format_rules = {
-        'mcq': """- MULTIPLE CHOICE (MCQ):
+        'mcq': f"""- MULTIPLE CHOICE (MCQ):
   * "qtype": "mcq"
   * "question": The question text (string)
   * "answer": The correct choice letter ("A", "B", "C", or "D") OR the full text of the correct choice
-  * "choices": An array of EXACTLY 4 distinct option strings
+  * "choices": An array of EXACTLY {max_c} distinct option strings
   * "rationale": Clear pedagogical explanation of why the answer is correct
   * "blooms_level": Cognitive level ("Remember", "Understand", "Apply", "Analyze", "Evaluate", or "Create")""",
         'true_false': """- TRUE / FALSE:
@@ -199,37 +228,30 @@ MANDATORY BLOOM'S TAXONOMY SPECIFICATION:
         qtype_header = f"MIXED FORMATS ({types_joined})"
         mix_instruction = f"Distribute the {num_questions} questions evenly across the selected formats: {types_joined}. You MUST include the correct 'qtype' property ('{'', ''.join(selected_types)}') on every single question object."
 
-    sample_items = []
-    if 'mcq' in selected_types:
-        sample_items.append({
-            "qtype": "mcq",
-            "question": "What is the primary function of mitochondria?",
-            "choices": ["ATP energy production", "Protein synthesis", "Lipid digestion", "Cell division"],
-            "answer": "A",
-            "rationale": "Mitochondria generate most of the chemical energy needed by the cell.",
-            "blooms_level": "Remember",
-            "difficulty": selected_diffs[0]
-        })
-    if 'true_false' in selected_types:
-        sample_items.append({
-            "qtype": "true_false",
-            "question": "Mitochondria possess their own independent circular DNA.",
-            "choices": ["True", "False"],
-            "answer": "True",
-            "rationale": "Mitochondria contain mitochondrial DNA (mtDNA) inherited maternally.",
-            "blooms_level": "Understand",
-            "difficulty": selected_diffs[min(1, len(selected_diffs) - 1)]
-        })
-    if 'short_answer' in selected_types:
-        sample_items.append({
-            "qtype": "short_answer",
-            "question": "Explain why mitochondria are referred to as the powerhouse of the cell.",
-            "choices": [],
-            "answer": "They generate adenosine triphosphate (ATP) through cellular respiration to fuel cellular activities.",
-            "rationale": "Students should identify ATP synthesis and aerobic respiration.",
-            "blooms_level": "Analyze",
-            "difficulty": selected_diffs[-1]
-        })
+    # Stage-appropriate few-shot examples
+    sample_items = [ex for ex in profile.few_shot_examples if ex.get("qtype") in selected_types]
+    if not sample_items:
+        # Fallback if profile didn't specify the format
+        if 'mcq' in selected_types:
+            sample_items.append({
+                "qtype": "mcq",
+                "question": f"Sample assessment question calibrated for {target_level.label}?",
+                "choices": [f"Option {chr(65+i)}" for i in range(max_c)],
+                "answer": "A",
+                "rationale": "Pedagogical explanation.",
+                "blooms_level": "Understand",
+                "difficulty": selected_diffs[0]
+            })
+        if 'true_false' in selected_types:
+            sample_items.append({
+                "qtype": "true_false",
+                "question": "Sample factual claim to assess.",
+                "choices": ["True", "False"],
+                "answer": "True",
+                "rationale": "Clear reference rationale.",
+                "blooms_level": "Understand",
+                "difficulty": selected_diffs[0]
+            })
 
     example_json = json.dumps(sample_items, indent=2)
 
@@ -244,7 +266,9 @@ OPERATIONAL DIRECTIVE: {mode_header}
 COGNITIVE DIVERSITY ANGLE:
 {focus_angle}
 
-Generate EXACTLY {num_questions} high-quality questions at [{', '.join(selected_diffs).upper()}] difficulty for {class_id or 'Secondary/High School'} in {subject or 'General Studies'}.
+{pedagogy_block}
+
+Generate EXACTLY {num_questions} high-quality questions at [{', '.join(selected_diffs).upper()}] difficulty for {target_level.label} (Stage: {target_level.stage.value}) in {subject or 'General Studies'}.
 
 1. CONTEXT CONTENT:
 - ORIGINAL TEXT:
@@ -269,6 +293,7 @@ Each question object in your JSON output must follow these schemas:
 - Generate EXACTLY {num_questions} questions
 - Ensure all questions are derived strictly from the provided text context
 - Set "qtype", "difficulty", and "blooms_level" on each question object
+- Format choices according to {target_level.label} requirements (maximum {max_c} options)
 
 EXAMPLE VALID JSON ARRAY:
 {example_json}
@@ -286,17 +311,30 @@ def generate_questions_from_content(
     class_id: str = None,
     subject: str = None,
     blooms_level: str = "all",
-    mode: str = "exam"
+    mode: str = "exam",
+    education_level: Optional[Union[str, EducationLevel]] = None
 ) -> str:
     """
     Generate questions from the given text using Groq's model with multi-selection support,
-    intelligent multi-chunk document sampling, and exam vs practice mode separation.
+    intelligent multi-chunk document sampling, educational level calibration, and exam vs practice mode separation.
     """
     if not text.strip() and not refined_text.strip():
         return json.dumps([{"error": "No text content provided"}])
     
     if not settings.GROQ_API_KEY:
         return json.dumps([{"error": "GROQ_API_KEY not found in environment variables"}])
+    
+    # Resolve target educational level (Primary 1 through PhD)
+    target_level: Optional[EducationLevel] = None
+    if isinstance(education_level, EducationLevel):
+        target_level = education_level
+    elif education_level:
+        target_level = resolve_level(str(education_level))
+    elif class_id:
+        target_level = resolve_level(str(class_id))
+
+    if target_level is None:
+        target_level = get_level(DEFAULT_LEVEL_CODE)
     
     # If no refined text is provided, use the original text
     if not refined_text.strip():
@@ -349,7 +387,8 @@ def generate_questions_from_content(
             mode=mode,
             chunk_index=batch_idx,
             total_chunks=total_batches,
-            variation_seed=random.randint(1, 1000000)
+            variation_seed=random.randint(1, 1000000),
+            education_level=target_level
         )
         
         batch_success = False
@@ -433,6 +472,8 @@ def generate_questions_from_content(
                         else:
                             item_bloom = "Understand"
 
+                    max_c = target_level.max_choices if target_level else 4
+
                     processed_q = {
                         "question": q.get("question", "").strip() or "No question provided",
                         "answer": "",
@@ -440,7 +481,9 @@ def generate_questions_from_content(
                         "qtype": item_qtype,
                         "difficulty": item_diff,
                         "blooms_level": item_bloom,
-                        "choices": []
+                        "choices": [],
+                        "education_level": target_level.code,
+                        "class_id": class_id or target_level.label
                     }
                     
                     if "answer" in q:
@@ -451,13 +494,13 @@ def generate_questions_from_content(
                     # Handle type-specific fields
                     if item_qtype == "mcq":
                         if "choices" in q and isinstance(q["choices"], list):
-                            processed_q["choices"] = [str(c).strip() for c in q["choices"][:4]]
+                            processed_q["choices"] = [str(c).strip() for c in q["choices"][:max_c]]
                         elif "options" in q and isinstance(q["options"], list):
-                            processed_q["choices"] = [str(o).strip() for o in q["options"][:4]]
+                            processed_q["choices"] = [str(o).strip() for o in q["options"][:max_c]]
                         else:
-                            processed_q["choices"] = ["Option A", "Option B", "Option C", "Option D"]
+                            processed_q["choices"] = [f"Option {chr(65+i)}" for i in range(max_c)]
                             
-                        while len(processed_q["choices"]) < 4:
+                        while len(processed_q["choices"]) < max_c:
                             processed_q["choices"].append(f"Option {chr(65 + len(processed_q['choices']))}")
                             
                         if processed_q["answer"] in ["A", "B", "C", "D"]:

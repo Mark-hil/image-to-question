@@ -90,7 +90,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
           handleAddFiles(e.target.files);
           if (e.target) e.target.value = '';
         }}
-        accept="image/*,.pdf,.pptx,.ppt"
+        accept="image/*,.pdf,.pptx,.ppt,.docx,.doc,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
         multiple
         style={{ display: 'none' }}
       />
@@ -225,16 +225,17 @@ export const Dropzone: React.FC<DropzoneProps> = ({
           </div>
           <div>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '6px' }} className="text-gradient">
-              Drag & Drop Worksheets, PDFs, or PowerPoint Slides
+              Drag & Drop Worksheets, PDFs, Word Docs, or Slides
             </h3>
-            <p style={{ fontSize: '0.88rem', color: '#94A3B8', maxWidth: '440px', margin: '0 auto 14px auto' }}>
-              Upload textbook pages, image diagrams, PDF documents, or PPTX presentations for combined AI extraction.
+            <p style={{ fontSize: '0.88rem', color: '#94A3B8', maxWidth: '460px', margin: '0 auto 14px auto' }}>
+              Upload textbook pages, image diagrams, PDF documents, Word (.docx) worksheets, or PPTX presentations for combined AI extraction.
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
             <span className="badge badge-indigo"><ImageIcon size={12} /> PNG / JPG</span>
             <span className="badge badge-purple"><FileText size={12} /> PDF Worksheets</span>
+            <span className="badge badge-blue" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60A5FA', border: '1px solid rgba(59, 130, 246, 0.3)' }}><FileText size={12} /> Word DOCX</span>
             <span className="badge badge-indigo"><FileText size={12} /> PPTX Slides</span>
             <span className="badge badge-emerald"><Sparkles size={12} /> Multi-Doc AI</span>
           </div>
