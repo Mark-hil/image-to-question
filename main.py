@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from config import settings
 from utils.exceptions import AppError
+from utils.file import cleanup_expired_uploads
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +32,20 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Import after environment setup
 from database import engine, Base, init_db
 from routers import upload, generate, upload_and_generate, questions, tenant, billing, auth, quizzes, tasks, education_levels
+
+async def _periodic_upload_cleanup() -> None:
+    """Periodically sweep orphaned temporary files from UPLOAD_DIR."""
+    interval = max(60, settings.UPLOAD_CLEANUP_INTERVAL_SECONDS)
+    ttl = max(60, settings.UPLOAD_TTL_SECONDS)
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            cleanup_expired_uploads(UPLOAD_DIR, max_age_seconds=ttl)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Periodic upload cleanup error: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,12 +68,21 @@ async def lifespan(app: FastAPI):
         logger.error(f"Database URL: {settings.DATABASE_URL[:50]}...")
         logger.error("Please check your database configuration")
         # Don't raise - let the app start without database for debugging
+
+    # Sweep any stale uploads left behind by previous crashes or unconsumed /upload/files calls
+    cleanup_expired_uploads(UPLOAD_DIR, max_age_seconds=settings.UPLOAD_TTL_SECONDS)
+    cleanup_task = asyncio.create_task(_periodic_upload_cleanup())
         
     logger.info("Application startup complete.")
     
     yield
     
     logger.info("Shutting down application...")
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     # Clean up database connections
     try:
         await engine.dispose()

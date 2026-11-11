@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
+from config import settings
 from database import get_db
 from services import vision_service, qgen_service, pdf_service, ultimate_ocr_service
 from models import Question
@@ -41,7 +42,7 @@ async def inspect_pdf(file: UploadFile = File(...)):
     if ext not in ['pdf', 'pptx', 'ppt', 'docx', 'doc', 'txt']:
         raise AppError(status_code=400, error_code="INVALID_FILE_TYPE", message="File must be a PDF, Word document, PowerPoint presentation, or text file.")
     
-    saved_path = await save_upload_file(file, "uploads")
+    saved_path = await save_upload_file(file, settings.UPLOAD_DIR)
     try:
         if ext in ['pptx', 'ppt']:
             from services.pptx_service import inspect_pptx_slides

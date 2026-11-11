@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DATABASE_URL: str = "sqlite+aiosqlite:///./app.db"
     UPLOAD_DIR: str = "uploads"
+    UPLOAD_TTL_SECONDS: int = 3600
+    UPLOAD_CLEANUP_INTERVAL_SECONDS: int = 900
     
     # External APIs and Tools
     GROQ_API_KEY: Optional[str] = None

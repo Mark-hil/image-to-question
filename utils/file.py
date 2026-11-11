@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 import logging
 from typing import List, Optional
@@ -63,6 +64,38 @@ def cleanup_files(file_paths: Optional[List[str]]) -> None:
         return
     for path in file_paths:
         cleanup_file(path)
+
+
+def cleanup_expired_uploads(upload_dir: str, max_age_seconds: int = 3600) -> int:
+    """
+    Remove orphaned temporary files in upload_dir older than max_age_seconds.
+    Returns the number of files deleted.
+    """
+    if not upload_dir or not os.path.isdir(upload_dir):
+        return 0
+
+    now = time.time()
+    removed = 0
+    try:
+        with os.scandir(upload_dir) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    age = now - entry.stat(follow_symlinks=False).st_mtime
+                    if age >= max_age_seconds:
+                        os.remove(entry.path)
+                        removed += 1
+                except FileNotFoundError:
+                    continue
+                except Exception as e:
+                    logger.warning(f"Failed to remove expired upload {entry.path}: {e}")
+    except Exception as e:
+        logger.warning(f"Error scanning upload directory {upload_dir}: {e}")
+
+    if removed > 0:
+        logger.info(f"TTL sweep removed {removed} orphaned file(s) from {upload_dir}")
+    return removed
 
 async def save_upload_file(upload_file: UploadFile, upload_dir: str, max_image_size: int = 3 * 1024 * 1024, max_pdf_size: int = 15 * 1024 * 1024) -> str:
     """
