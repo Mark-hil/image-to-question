@@ -1,5 +1,5 @@
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from urllib.parse import urlsplit, urlunsplit, parse_qs
 import ssl as _ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -94,8 +94,69 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.rollback()
             raise
 
+def _format_column_default(col, dialect) -> Optional[str]:
+    """Return a SQL DEFAULT expression for a column when adding it to an existing table."""
+    if col.server_default is not None:
+        arg = col.server_default.arg
+        if hasattr(arg, "text"):
+            return str(arg.text)
+        if hasattr(arg, "compile"):
+            return str(arg.compile(dialect=dialect))
+        return str(arg)
+    if col.default is not None and col.default.is_scalar:
+        val = col.default.arg
+        if isinstance(val, bool):
+            return ("true" if val else "false") if dialect.name == "postgresql" else ("1" if val else "0")
+        if isinstance(val, (int, float)):
+            return str(val)
+        if isinstance(val, str):
+            escaped = val.replace("'", "''")
+            return f"'{escaped}'"
+    return None
+
+
+def _sync_missing_columns(sync_conn) -> None:
+    """Inspect existing tables and add any columns defined on ORM models that are missing in the DB."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    dialect = sync_conn.dialect
+    preparer = dialect.identifier_preparer
+    existing_tables = set(inspector.get_table_names())
+
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in existing_tables:
+            continue
+
+        existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+        quoted_table = preparer.quote(table_name)
+
+        for col in table.columns:
+            if col.name in existing_cols:
+                continue
+
+            col_type = col.type.compile(dialect=dialect)
+            quoted_col = preparer.quote(col.name)
+            default_expr = _format_column_default(col, dialect)
+
+            ddl = f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {col_type}"
+            if default_expr is not None:
+                ddl += f" DEFAULT {default_expr}"
+                if not col.nullable:
+                    ddl += " NOT NULL"
+
+            sync_conn.execute(text(ddl))
+            logger.info(f"Added missing column '{col.name}' ({col_type}) to table '{table_name}'")
+
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes(table_name)}
+        for idx in table.indexes:
+            if idx.name and idx.name not in existing_indexes:
+                idx.create(sync_conn, checkfirst=True)
+                logger.info(f"Created missing index '{idx.name}' on table '{table_name}'")
+
+
 async def init_db() -> None:
-    """Create database tables with retry logic and better error handling."""
+    """Create database tables with retry logic and automatic column synchronization."""
     max_retries = 3
     retry_delay = 2  # seconds
     
@@ -108,40 +169,11 @@ async def init_db() -> None:
                 await conn.execute(text("SELECT 1"))
                 logger.info("Database connection successful")
                 
-            # Create tables (Import models to register them on Base.metadata)
+            # Create tables and add any missing columns on existing tables
             import models  # noqa: F401
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-                # Auto-migrate missing columns for existing SQLite/Postgres tables
-                try:
-                    await conn.execute(text("ALTER TABLE questions ADD COLUMN blooms_level VARCHAR(30) DEFAULT 'Understand'"))
-                    logger.info("Added missing blooms_level column to questions table")
-                except Exception:
-                    pass  # Column already exists
-                try:
-                    await conn.execute(text("ALTER TABLE quiz_questions ADD COLUMN blooms_level VARCHAR(30) DEFAULT 'Understand'"))
-                    logger.info("Added missing blooms_level column to quiz_questions table")
-                except Exception:
-                    pass  # Column already exists
-
-                try:
-                    await conn.execute(text("ALTER TABLE quizzes ADD COLUMN class_id VARCHAR(100)"))
-                    logger.info("Added missing class_id column to quizzes table")
-                except Exception:
-                    pass  # Column already exists
-
-                try:
-                    await conn.execute(text("ALTER TABLE quiz_questions ADD COLUMN class_id VARCHAR(100)"))
-                    logger.info("Added missing class_id column to quiz_questions table")
-                except Exception:
-                    pass  # Column already exists
-
-                try:
-                    await conn.execute(text("ALTER TABLE users ADD COLUMN monthly_questions_generated INTEGER DEFAULT 0"))
-                    logger.info("Added missing monthly_questions_generated column to users table")
-                except Exception:
-                    pass  # Column already exists
-
+                await conn.run_sync(_sync_missing_columns)
                 logger.info("✅ Database tables created/migrated successfully")
                 return
                 
