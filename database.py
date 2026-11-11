@@ -20,7 +20,9 @@ _raw_db_url = settings.DATABASE_URL
 # requires the URL to specify an async driver such as `asyncpg`:
 #   postgresql+asyncpg://user:pass@host/db
 # Normalize common postgres URLs to use asyncpg automatically.
-if _raw_db_url.startswith("postgresql://") and "+" not in _raw_db_url:
+if _raw_db_url.startswith("postgres://"):
+    DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+elif _raw_db_url.startswith("postgresql://") and "+" not in _raw_db_url:
     DATABASE_URL = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 elif _raw_db_url.startswith("postgresql+psycopg2://"):
     DATABASE_URL = _raw_db_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)

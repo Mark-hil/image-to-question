@@ -1,18 +1,32 @@
-# Use Python 3.11 slim as the base image
+# Stage 1: Build React Frontend
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python Backend with uv, OCR & Poppler
 FROM python:3.11-slim
+
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     UPLOAD_DIR=/app/uploads \
-    TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
+    UV_PYTHON=/usr/local/bin/python3 \
+    PATH="/app/.venv/bin:$PATH"
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies only what's needed
-RUN apt-get update && apt-get install -y \
+# Install system dependencies for OCR (Tesseract) and PDF rendering (Poppler)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     tesseract-ocr-fra \
@@ -22,25 +36,24 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only essential files first (leverage Docker cache)
-COPY pyproject.toml requirements.txt ./
+# Install Python dependencies from uv.lock (leverage Docker cache)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
-
-# Copy application code
+# Copy application code and built frontend assets
 COPY . .
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 # Create uploads directory and set permissions
 RUN mkdir -p $UPLOAD_DIR && \
     chmod -R 777 $UPLOAD_DIR
 
-# Expose the port the app runs on
+# Expose the default port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+# Health check (supports dynamic $PORT)
+HEALTHCHECK --interval=30s --timeout=30s --start-period=10s --retries=3 \
+    CMD sh -c "curl -f http://localhost:${PORT:-8000}/health || exit 1"
 
-# Command to run the application (Render-friendly)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start FastAPI (supports dynamic $PORT on Railway, Render, Cloud Run, etc.)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

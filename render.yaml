@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: qgen-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile.render
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: UPLOAD_DIR
+        value: /app/uploads
+      - key: TESSERACT_CMD
+        value: /usr/bin/tesseract
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

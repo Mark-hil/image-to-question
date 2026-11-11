@@ -112,14 +112,20 @@ export const DeveloperPage: React.FC<DeveloperPageProps> = ({ user, onOpenAuth }
   };
 
   // Code snippets generator
-  const getCurlSnippet = () => `curl -X POST "http://localhost:8000/api/generate/upload-and-generate?qtype=mcq&difficulty=medium&num_questions=5" \\
+  const apiOrigin =
+    import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, '') ||
+    (import.meta.env.PROD && typeof window !== 'undefined'
+      ? window.location.origin
+      : 'http://localhost:8000');
+
+  const getCurlSnippet = () => `curl -X POST "${apiOrigin}/api/generate/upload-and-generate?qtype=mcq&difficulty=medium&num_questions=5" \\
   -H "X-API-Key: YOUR_API_KEY_HERE" \\
   -F "files=@/path/to/worksheet.png" \\
   -F "subject=Physics"`;
 
   const getPythonSnippet = () => `import requests
 
-url = "http://localhost:8000/api/generate/upload-and-generate"
+url = "${apiOrigin}/api/generate/upload-and-generate"
 headers = {"X-API-Key": "YOUR_API_KEY_HERE"}
 params = {
     "qtype": "mcq",
@@ -136,7 +142,7 @@ print("Generated Questions:", questions)`;
   const getJsSnippet = () => `const formData = new FormData();
 formData.append("files", fileInput.files[0]);
 
-const response = await fetch("http://localhost:8000/api/generate/upload-and-generate?qtype=mcq&num_questions=5", {
+const response = await fetch("${apiOrigin}/api/generate/upload-and-generate?qtype=mcq&num_questions=5", {
   method: "POST",
   headers: {
     "X-API-Key": "YOUR_API_KEY_HERE"

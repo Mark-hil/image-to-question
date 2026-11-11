@@ -10,11 +10,15 @@ dist/
 wheels/
 *.egg-info/
 
-# Virtual environments
+# Virtual environments and caches
 .venv
 env/
 venv/
 ENV/
+node_modules/
+frontend/node_modules/
+.pytest_cache/
+.git/
 .env
 uploads
 *.png
